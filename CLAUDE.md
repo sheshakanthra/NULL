@@ -81,6 +81,16 @@ BUILD.md §2 does not answer any of them, so they are recorded here instead.
 One commit per logical unit, message names the milestone: `M1: cost model — DP charge on
 delivery sells`. Do not batch a milestone into one commit.
 
+## Git ownership
+
+Claude owns git for this repo. Commit at the end of every milestone without being asked,
+split per the one-commit-per-logical-unit rule. Never open an interactive editor — use
+`git commit -m`, `git rebase --autosquash`, and `GIT_SEQUENCE_EDITOR=: git rebase -i` so
+nothing ever blocks on a human. Push to `origin/main` after each milestone's commits land.
+Never force-push without saying so in the session summary first. Verify after every commit
+batch: fresh worktree at HEAD, full suite green, `mypy --strict` clean — report the
+numbers, don't assert success.
+
 ## Session summary format
 
 End every session with:
