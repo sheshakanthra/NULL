@@ -29,7 +29,7 @@ prove it. Default verdict is REJECT. It is a prosecutor, not a backtester.
 
 ## Frozen contract decisions (settled at M0 — do not re-litigate)
 
-These shape `contracts.py` and were decided by Sheshakanth before it was written.
+These three shape `contracts.py` and were decided by Sheshakanth before it was written.
 BUILD.md §2 does not answer any of them, so they are recorded here instead.
 
 1. **`Series` is a Pydantic model, not a `pandas.Series`.** Parallel frozen tuples of
@@ -42,6 +42,11 @@ BUILD.md §2 does not answer any of them, so they are recorded here instead.
    such bit would flip the verdict hash. NaN and infinity are rejected for the same
    reason as invariant 6: missing evidence must fail loudly, never serialise into an
    artifact as a silent hole.
+3. **`StrategyRun.trials` carries per-variant `TrialRecord`s alongside `n_trials`.**
+   §6.1 needs the variance across trial Sharpes and `n_trials` alone cannot supply it.
+   `trials` may be empty or a subset and never exceeds `n_trials`; it is **never** a
+   substitute for the declared count. When it is empty, the DSR gate must assume a
+   variance and its rationale string must say so out loud.
 
 ## Working rules
 

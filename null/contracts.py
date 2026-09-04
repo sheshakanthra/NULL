@@ -5,7 +5,7 @@ against them and nothing else. If a milestone appears to need a contract change,
 stop and ask (CLAUDE.md invariant 5). Do not widen a model to make a downstream
 module easier.
 
-Two decisions are baked in here and are worth understanding before you read on.
+Three decisions are baked in here and are worth understanding before you read on.
 
 1. ``Series`` is a first-class frozen model of parallel timestamp/value tuples,
    not a ``pandas.Series``. A pandas object is mutable, its canonical byte
@@ -21,6 +21,16 @@ Two decisions are baked in here and are worth understanding before you read on.
    floor of a cross-machine numerical difference. Rejecting NaN and infinity is
    the same rule as invariant 6: missing evidence must fail loudly, never
    serialise into an artifact as a silent hole.
+
+3. ``StrategyRun.n_trials`` is required and non-defaulted, and ``trials`` carries
+   the per-variant record when the caller has it. Section 6.1 needs the variance
+   across trial Sharpes to deflate one; ``n_trials`` alone cannot supply it.
+   ``trials`` never substitutes for ``n_trials`` -- a caller may log a subset or
+   none at all, but they must always declare the count.
+
+A caller that passes ``n_trials=1`` after a 5,000-run grid search is committing
+fraud, and the deflated-Sharpe gate is the only thing standing between them and
+a lie.
 """
 
 from __future__ import annotations
@@ -45,6 +55,9 @@ __all__ = [
     "NullModel",
     "SPEC_VERSION",
     "Series",
+    "StrategyRun",
+    "TargetWeight",
+    "TrialRecord",
 ]
 
 #: Stamped onto every :class:`Verdict`. Bump only when a frozen contract changes,
@@ -262,6 +275,115 @@ class Bar(NullModel):
         if self.low > min(self.open, self.close):
             raise ValueError(
                 f"low {self.low} above open/close ({self.open}/{self.close})"
+            )
+        return self
+
+# ---------------------------------------------------------------------------
+# strategy input
+# ---------------------------------------------------------------------------
+
+
+class TargetWeight(NullModel):
+    """Canonical strategy output. NOT a trade list.
+
+    ``weight`` is a signed fraction of equity: ``-0.5`` is 50% short. It is
+    deliberately unbounded -- leverage is a thing a strategy may legitimately
+    declare, and the capacity and drawdown gates are what judge it.
+    """
+
+    ts: Timestamp
+    """Decision time."""
+    symbol: Symbol
+    weight: NullFloat
+
+
+class TrialRecord(NullModel):
+    """One variant tried on the way to the submitted strategy.
+
+    ``returns`` is optional but valuable: supplied for every trial, it gives PBO
+    (section 6.2) a real return matrix instead of a reconstructed one.
+    """
+
+    param_hash: NonEmptyStr
+    sharpe: NullFloat
+    returns: Series | None = None
+
+
+def _canonical_universe(value: tuple[str, ...]) -> tuple[str, ...]:
+    symbols = [symbol.strip() for symbol in value]
+    if not symbols:
+        raise ValueError("universe must contain at least one symbol")
+    if any(not symbol for symbol in symbols):
+        raise ValueError("universe contains an empty symbol")
+    duplicates = sorted({s for s in symbols if symbols.count(s) > 1})
+    if duplicates:
+        raise ValueError(f"universe contains duplicate symbols: {duplicates}")
+    return tuple(sorted(symbols))
+
+
+def _canonical_weights(value: tuple[TargetWeight, ...]) -> tuple[TargetWeight, ...]:
+    ordered = tuple(sorted(value, key=lambda w: (w.ts, w.symbol)))
+    seen: set[tuple[datetime, str]] = set()
+    for weight in ordered:
+        key = (weight.ts, weight.symbol)
+        if key in seen:
+            raise ValueError(
+                f"duplicate weight for {weight.symbol} at {weight.ts.isoformat()}: a "
+                "strategy must state one target per symbol per decision time"
+            )
+        seen.add(key)
+    return ordered
+
+
+Universe = Annotated[tuple[Symbol, ...], AfterValidator(_canonical_universe)]
+Weights = Annotated[tuple[TargetWeight, ...], AfterValidator(_canonical_weights)]
+
+
+class StrategyRun(NullModel):
+    """A strategy submitted for audit."""
+
+    strategy_id: NonEmptyStr
+    param_hash: NonEmptyStr
+    """Hash of the exact param set used."""
+
+    n_trials: int = Field(ge=1)
+    """HOW MANY VARIANTS WERE TRIED TO GET HERE. Required, never defaulted.
+
+    A strategy that will not declare how many variants were tried cannot be
+    audited. Declaring 1 after a 5,000-run grid search is fraud; the
+    deflated-Sharpe gate is what catches it.
+    """
+
+    universe: Universe
+    """Canonically sorted and deduplicated so caller ordering cannot move the hash."""
+
+    weights: Weights
+    """Canonically ordered by (ts, symbol), one target per symbol per decision time."""
+
+    trials: tuple[TrialRecord, ...] = ()
+    """Per-variant evidence. May be empty or a subset; never exceeds ``n_trials``.
+
+    When absent, section 6.1 must assume a variance across trial Sharpes, and the
+    gate rationale has to say so out loud.
+    """
+
+    decision_lag_bars: int = Field(default=1, ge=1)
+    """A signal computed on bar ``t`` close may not fill before bar ``t+1`` open."""
+
+    initial_capital: PositiveFloat
+
+    @model_validator(mode="after")
+    def _check_coherence(self) -> Self:
+        unknown = sorted({w.symbol for w in self.weights} - set(self.universe))
+        if unknown:
+            raise ValueError(
+                f"weights reference symbols outside the declared universe: {unknown}. "
+                "An undeclared symbol cannot be checked for point-in-time membership."
+            )
+        if len(self.trials) > self.n_trials:
+            raise ValueError(
+                f"{len(self.trials)} trial records supplied but only {self.n_trials} "
+                "trials declared"
             )
         return self
 
