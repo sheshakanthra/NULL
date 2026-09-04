@@ -1,0 +1,44 @@
+# Leakage audit thresholds. BUILD.md §5.
+#
+# These are detection thresholds, not rates, but the same rule applies: they live
+# here, never as literals in Python (CLAUDE.md, working rules).
+#
+# A fatal flag short-circuits the whole audit to REJECT before any statistic is
+# computed. Do not compute a Sharpe on a strategy that can see the future — you
+# will be tempted to believe the number.
+
+lookahead:
+  # A strategy whose declared decision lag is honest cannot systematically know the
+  # sign of the return it is about to capture. Perfect foresight shows up as a hit
+  # rate that no real strategy sustains.
+  #
+  # 0.90 is deliberately far above anything achievable: published daily equity
+  # strategies live in the 0.50-0.58 band, and 0.65 sustained over hundreds of bars
+  # would already be extraordinary. Setting it this high means a fatal flag is
+  # near-certainly a bug in the strategy's data handling rather than a great
+  # strategy being punished. Lower it only with evidence.
+  max_directional_hit_rate: 0.90
+
+  # Below this many decisions the hit rate is noise; a 10-bar strategy can hit 100%
+  # by luck. Flag nothing rather than flag wrongly.
+  min_observations: 30
+
+  severity: fatal
+
+monotonicity:
+  # A weight timestamped at or before the bar whose data it depends on is acting on
+  # information it could not have had.
+  severity: fatal
+
+corporate_actions:
+  # Single-bar moves beyond this are almost always an unadjusted split or bonus
+  # rather than a real price move. Without a corporate-action calendar to confirm
+  # against, this can only be a warning — see the limitation note in the audit.
+  max_abs_single_bar_return: 0.25
+  severity: warning
+
+universe:
+  # Weights on symbols absent from the declared universe, or on dates where the
+  # symbol was not a constituent. Point-in-time membership data is not yet wired
+  # up (open M3 data decision), so only the declared-universe half is enforced.
+  severity: fatal
