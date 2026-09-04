@@ -1,0 +1,67 @@
+# Indian equity charge stack. Every rate NULL uses lives here, never in Python.
+#
+# _verified_on is deliberately NOT a date. These rates were written from general
+# knowledge of the published Indian equity charge stack and have NOT been checked
+# against a live broker charge list. Until someone opens their broker's charge
+# page and reconciles every line below, treat any cost number NULL produces as
+# indicative only. IndiaEquityCostModel.config.rates_are_verified returns False
+# while this field is not an ISO date, and that flag is meant to be printed on
+# every report.
+#
+# Rates that are wrong in the optimistic direction silently inflate every
+# backtest, which is precisely the failure mode NULL exists to catch. Getting
+# caught by your own instrument would be embarrassing.
+
+_source: "UNVERIFIED - written from general knowledge, not reconciled against a broker charge list"
+_verified_on: "UNVERIFIED"
+_warning: "Stale or unverified rates silently inflate every backtest. Re-verify quarterly."
+
+segments:
+  equity_delivery:
+    # Most discount brokers charge zero brokerage on delivery. If yours does not,
+    # this is the first line to fix.
+    brokerage_pct: 0.0
+    brokerage_per_order_cap: 20.0
+
+    # STT on delivery is symmetric: charged on both the buy and the sell.
+    stt_buy_pct: 0.1
+    stt_sell_pct: 0.1
+
+    exchange_txn_pct: 0.00297      # NSE equity cash
+    sebi_turnover_pct: 0.0001      # Rs 10 per crore
+    stamp_duty_buy_pct: 0.015      # buy side only
+    gst_pct: 18.0                  # on brokerage + exchange txn + SEBI turnover only
+
+    # Flat, per scrip, per day, on delivery sells. GST is already included in this
+    # figure, so gst_pct must NOT be applied to it again. This is the line that
+    # murders small-notional strategies and the reason the M1 acceptance test
+    # exists.
+    dp_charge_per_scrip_per_sell: 15.93
+
+  equity_intraday:
+    brokerage_pct: 0.03
+    brokerage_per_order_cap: 20.0
+
+    # Intraday STT is sell-side only.
+    stt_buy_pct: 0.0
+    stt_sell_pct: 0.025
+
+    exchange_txn_pct: 0.00297
+    sebi_turnover_pct: 0.0001
+    stamp_duty_buy_pct: 0.003
+    gst_pct: 18.0
+    dp_charge_per_scrip_per_sell: 0.0   # nothing leaves the demat account
+
+slippage:
+  # cost_bps = half_spread_bps + k * sigma_daily * sqrt(order_value / adv_20) * 1e4
+  # Square-root impact law. A model that charges flat bps regardless of notional
+  # is how strategies fake capacity.
+  impact_k: 0.5
+
+  # Half-spread by liquidity tier, selected on 20d average daily value traded.
+  # Tiers are matched in order, first tier whose min_adv is satisfied wins, so
+  # they must stay sorted from most to least liquid.
+  liquidity_tiers:
+    - {name: large_cap, min_adv: 1000000000.0, half_spread_bps: 1.5}   # >= Rs 100 cr
+    - {name: mid_cap,   min_adv: 100000000.0,  half_spread_bps: 4.0}   # >= Rs 10 cr
+    - {name: small_cap, min_adv: 0.0,          half_spread_bps: 12.0}
