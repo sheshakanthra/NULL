@@ -387,9 +387,40 @@ That last row matters as much as the other seven. **A harness that rejects every
 exactly as useless as one that accepts everything.** If `true_edge_synthetic` cannot pass,
 your thresholds are miscalibrated and you will throw away real edges.
 
+### Open decision — the benchmark series (must be settled before M6 is called green)
+
+M2 built the benchmark harness with `benchmark_bars` as an **injected parameter**.
+`benchmark_check` never fetches or defaults a series, and that design stays. The source
+is still unchosen, and it is recorded here so it cannot quietly default to a price index
+later. **The NIFTY 50 price index is not a candidate** — it excludes roughly 1.2–1.5%/yr
+of dividends and hands every strategy that much free alpha, which is the exact bias M2
+exists to remove.
+
+Two candidates, neither picked:
+
+- **(a) NSE Indices daily index files**, archived forward from now and backfilled as far
+  as retention allows. Authoritative TRI. Cost: history is limited by whatever retention
+  reaches back to, and the archive only deepens with time.
+- **(b) NIFTYBEES-style ETF NAV as a TRI proxy.** Embeds dividends, but also embeds an
+  expense ratio and tracking error, so its total return sits *systematically below* true
+  index TRI — understating the benchmark, the same direction of error as the price index,
+  just smaller. If chosen it **must be labelled a proxy in every limitations block**, with
+  the direction of the bias named.
+
+See `docs/data_sources.md` for what was tested against the official NSE endpoint and why
+a plain HTTP client cannot reach it.
+
 ---
 
 ## 9. M7 — The demo that proves it works
+
+### Prerequisite — multi-symbol `benchmark_check`
+
+M2 shipped `benchmark_check` single-symbol; it raises `NotImplementedError` on a run whose
+universe holds more than one symbol. The RSI(2) demo runs across NIFTY 50 constituents, so
+**M7 is blocked until multi-symbol portfolio accounting lands**: per-symbol weight tracking,
+per-symbol turnover and cost attribution, and portfolio aggregation into a single net return
+series. Not a refactor of the existing path — the single-symbol case is a special case of it.
 
 Reproduce the reel's claim on your own harness.
 
