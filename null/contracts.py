@@ -53,6 +53,7 @@ __all__ = [
     "Evidence",
     "FLOAT_SIGNIFICANT_DIGITS",
     "FoldResult",
+    "GateResult",
     "IST",
     "LeakageFlag",
     "LeakageKind",
@@ -66,6 +67,7 @@ __all__ = [
     "StrategyRun",
     "TargetWeight",
     "TrialRecord",
+    "Verdict",
 ]
 
 #: Stamped onto every :class:`Verdict`. Bump only when a frozen contract changes,
@@ -541,6 +543,56 @@ class Evidence(NullModel):
     @property
     def has_fatal_leakage(self) -> bool:
         return any(flag.is_fatal for flag in self.leakage_flags)
+
+# ---------------------------------------------------------------------------
+# output
+# ---------------------------------------------------------------------------
+
+
+class GateResult(NullModel):
+    """The outcome of one gate.
+
+    ``rationale`` is written for a human reader and names the observed number,
+    the threshold, and *why* it failed. These strings are the product.
+    """
+
+    name: NonEmptyStr
+    passed: bool
+    observed: NullFloat | str
+    threshold: NullFloat | str
+    rationale: NonEmptyStr
+
+
+class Verdict(NullModel):
+    """The artifact. Default REJECT.
+
+    The PASS invariant is enforced here rather than only in the engine: a Verdict
+    that claims PASS while carrying a failing gate, or carrying no gates at all,
+    is unconstructible. Missing evidence never passes (CLAUDE.md invariant 6).
+    """
+
+    result: Literal["REJECT", "PASS"]
+    gates: tuple[GateResult, ...]
+    evidence_hash: Sha256Hex
+    spec_version: NonEmptyStr
+    generated_from: StrategyRun
+
+    @model_validator(mode="after")
+    def _check_default_reject(self) -> Self:
+        if self.result != "PASS":
+            return self
+        if not self.gates:
+            raise ValueError(
+                "PASS with zero gates: a strategy that was never tested is rejected, "
+                "not accepted"
+            )
+        failed = sorted(gate.name for gate in self.gates if not gate.passed)
+        if failed:
+            raise ValueError(
+                f"PASS recorded while these gates failed: {failed}. Every gate must "
+                "pass; the verdict is an AND, never a majority."
+            )
+        return self
 
 def _assert_no_runtime_surprises() -> None:
     """Guard against a stdlib change silently breaking float canonicalisation."""
