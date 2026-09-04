@@ -38,7 +38,12 @@ FORBIDDEN_LLM_PATTERNS: tuple[str, ...] = (
     r"\bgenerativeai\b",
     r"\bvertexai\b",
     r"\bbedrock\b",
-    r"\breplicate\b",
+    # Narrowed from r"\breplicate\b". "replicate"/"replicates" is standard
+    # statistics vocabulary -- bootstrap replicates -- and the broad form fired on
+    # legitimate code in null/stats/. A guard that cries wolf gets disabled, which
+    # is worse than a guard scoped to the thing it actually cares about.
+    r"\bimport\s+replicate\b",
+    r"\breplicate\.(?:com|run)\b",
     r"chat\.completions",
     r"completions\.create",
     r"messages\.create",

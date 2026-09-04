@@ -1,6 +1,6 @@
 # P0 — the PBO gate cannot reliably reject a noise grid at a 0.50 threshold
 
-Status: **open, blocking M4 and M6.** Found while building M4. Feature work on the
+Status: **partially addressed, still open. Blocking M6.** Found while building M4. Feature work on the
 statistical adversary is stopped per CLAUDE.md ("If a golden fixture's verdict
 flips, that is a P0. Stop feature work.").
 
@@ -103,3 +103,71 @@ separation 0.6023
 
 `true_edge_synthetic` passes on 7 of 7 seeds at 0.9709–0.9712. The higher observed
 Sharpe deflating to far less is the entire thesis working as intended.
+
+
+---
+
+# Update — option C implemented, and it does not fully close the gap
+
+The gate now reads an interval, not a point estimate. `PBO = 0.5` is the null and
+rejecting it requires evidence: the gate passes only when the **upper** bound
+falls below 0.5. Three states are specified so a single-trial strategy is not
+punished for a selection it never made.
+
+## Two interval constructions were tried. The first was wrong.
+
+**With-replacement stationary bootstrap over rows — rejected.** Resampling with
+replacement places the same original observation into both the train and test
+halves of a replicate. That is leakage inside the resample: the in-sample winner
+looks artificially persistent out of sample and PBO is pushed down. Measured, it
+produced intervals that did not contain their own point estimate (point 0.506,
+interval [0.021, 0.417]) and passed pure noise on **six seeds out of six**. A
+false PASS is worse than the coin flip it replaced.
+
+**Moving-block subsampling — adopted.** Contiguous windows of length m < T, so no
+observation is duplicated and train/test stay disjoint, with the interval built
+from the recentred, rescaled subsample distribution (Politis-Romano-Wolf,
+sqrt(m/T) factor).
+
+## Where it lands
+
+Pure noise, 200 candidates, 1,008 observations, gate = upper bound below 0.5:
+
+| seed | point | upper (scaled) | upper (unscaled) | verdict |
+|---|---|---|---|---|
+| 1 | 0.677 | 0.846 | 0.915 | REJECT |
+| 2 | 0.379 | 0.555 | 0.627 | REJECT |
+| 7 | 0.524 | 0.747 | 0.840 | REJECT |
+| 42 | 0.275 | 0.325 | 0.346 | **PASS** |
+| 99 | 0.390 | 0.450 | 0.475 | **PASS** |
+| 12345 | 0.614 | 0.771 | 0.836 | REJECT |
+
+Seed 2 is the construction working exactly as intended: a point estimate of 0.379
+is *not* evidence against a null of 0.5, and the interval says so.
+
+**But 2 of 6 noise seeds still pass.** Widening the interval does not fix it —
+the unscaled column is identical in verdict. On those seeds the point estimate is
+genuinely low (0.275, 0.390); that is not measurement error, it is the statistic's
+own realisation on that candidate set.
+
+## The residual problem
+
+The subsample interval measures variability across **time windows of one path**.
+The variability that actually matters is across **candidate-set realisations**,
+and that cannot be recovered from within a single dataset. PBO on one noise grid
+has a wide distribution (0.275 to 0.677 across six seeds) and no interval built
+from that grid alone separates "this was a noise search" from "this was skill".
+
+Improvement is real but partial: rejection on noise went from 3/7 to 4/6, and the
+semantics are now principled rather than a threshold chosen to fit fixtures. It is
+not solved.
+
+## Remaining options
+
+- **Accept the residual false-PASS rate** and rely on deflated Sharpe as the
+  binding gate for `overfit_grid`, with PBO as corroboration. DSR rejects 7/7.
+- **Require the caller to supply trials from independent resamples** so the
+  candidate-set variability becomes estimable. Heavy burden on the caller.
+- **Drop PBO from the gate list** and report it as an evidence panel only.
+
+Not chosen here.
