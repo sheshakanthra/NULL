@@ -39,7 +39,7 @@ import hashlib
 import json
 import math
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Annotated, Self
+from typing import TYPE_CHECKING, Annotated, Literal, Self
 
 import numpy as np
 import numpy.typing as npt
@@ -50,10 +50,18 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, keeps import cost off the h
 
 __all__ = [
     "Bar",
+    "Evidence",
     "FLOAT_SIGNIFICANT_DIGITS",
+    "FoldResult",
     "IST",
+    "LeakageFlag",
+    "LeakageKind",
     "NullModel",
+    "ParamPoint",
+    "PerfMetrics",
+    "RegressionResult",
     "SPEC_VERSION",
+    "SensitivityResult",
     "Series",
     "StrategyRun",
     "TargetWeight",
@@ -386,6 +394,153 @@ class StrategyRun(NullModel):
                 "trials declared"
             )
         return self
+
+# ---------------------------------------------------------------------------
+# evidence components
+# ---------------------------------------------------------------------------
+
+
+class PerfMetrics(NullModel):
+    """The metric panel from BUILD.md section 4."""
+
+    cagr: NullFloat
+    vol_annual: NonNegativeFloat
+    sharpe: NullFloat
+    sortino: NullFloat
+    max_drawdown: NonNegativeFloat
+    """Positive fraction: 0.35 means a 35% peak-to-trough decline."""
+    calmar: NullFloat
+    longest_underwater_days: int = Field(ge=0)
+    hit_rate: Probability
+    avg_win: NullFloat
+    avg_loss: NullFloat
+    turnover_annual: NonNegativeFloat
+    """Annualised, two-sided."""
+    time_in_market: Probability
+    tail_ratio: NonNegativeFloat
+    worst_5_days: tuple[NullFloat, ...] = Field(max_length=5)
+    """Worst daily returns, ascending. Shorter than 5 only for a shorter sample."""
+    n_obs: int = Field(ge=0)
+
+
+class RegressionResult(NullModel):
+    """Strategy excess returns regressed on benchmark excess returns.
+
+    Section 4, rule 4: alpha with a t-stat below 2 is not alpha.
+    """
+
+    alpha_annual: NullFloat
+    alpha_stderr: NonNegativeFloat
+    alpha_tstat: NullFloat
+    beta: NullFloat
+    beta_tstat: NullFloat
+    r_squared: Probability
+    n_obs: int = Field(ge=0)
+
+
+class FoldResult(NullModel):
+    """One walk-forward fold, purged and embargoed (section 6.5)."""
+
+    fold_index: int = Field(ge=0)
+    train_start: Timestamp
+    train_end: Timestamp
+    test_start: Timestamp
+    test_end: Timestamp
+    purged_bars: int = Field(ge=0)
+    embargo_bars: int = Field(ge=0)
+    metrics: PerfMetrics
+    net_return: NullFloat
+    """Net of everything, over the test window."""
+
+    @model_validator(mode="after")
+    def _check_windows(self) -> Self:
+        if self.train_end < self.train_start:
+            raise ValueError("train window ends before it starts")
+        if self.test_end < self.test_start:
+            raise ValueError("test window ends before it starts")
+        return self
+
+
+class ParamPoint(NullModel):
+    """One point on the parameter neighbourhood surface (section 6.7)."""
+
+    param_hash: NonEmptyStr
+    offsets: dict[str, int]
+    """Step offset per parameter from the submitted point. All-zero is the peak."""
+    sharpe: NullFloat
+
+
+class SensitivityResult(NullModel):
+    """A spike is curve-fitting. A plateau is (weak) evidence of structure."""
+
+    param_names: tuple[NonEmptyStr, ...]
+    peak_sharpe: NullFloat
+    neighborhood_mean_sharpe: NullFloat
+    neighborhood_ratio: NullFloat
+    """Neighbourhood mean over peak. The gate wants this at 0.60 or better."""
+    points: tuple[ParamPoint, ...]
+
+
+LeakageKind = Literal[
+    "decision_lag",
+    "timestamp_monotonicity",
+    "survivorship",
+    "corporate_action",
+    "nan_ffill",
+    "universe_rebalance_timing",
+]
+
+
+class LeakageFlag(NullModel):
+    """A finding from the leakage audit (section 5).
+
+    A single ``fatal`` flag short-circuits the whole audit to REJECT. Do not
+    compute a Sharpe on a strategy that can see the future -- you will be tempted
+    to believe the number.
+    """
+
+    kind: LeakageKind
+    severity: Literal["fatal", "warning"]
+    symbol: Symbol | None = None
+    ts: Timestamp | None = None
+    detail: NonEmptyStr
+    """Plain English, names the symbol and the date. Goes into the report."""
+
+    @property
+    def is_fatal(self) -> bool:
+        return self.severity == "fatal"
+
+
+class Evidence(NullModel):
+    """Everything the gates consume. Produced by the audit pipeline.
+
+    Gates are pure functions of this object: no I/O, no state, no globals.
+    """
+
+    equity_curve: Series
+    benchmark_curve: Series
+    net_returns: Series
+    gross_returns: Series
+    cost_breakdown: dict[str, NullFloat]
+    """Charge component -> total currency amount. Keys sorted at serialisation."""
+    turnover_annual: NonNegativeFloat
+    time_in_market: Probability
+    metrics: PerfMetrics
+    benchmark_metrics: PerfMetrics
+    alpha: RegressionResult
+    deflated_sharpe: Probability
+    """Probability the true Sharpe exceeds zero, after deflation (section 6.1)."""
+    pbo: Probability
+    reality_check_p: Probability
+    mtrl_years: NonNegativeFloat
+    walkforward: tuple[FoldResult, ...]
+    regimes: dict[str, PerfMetrics]
+    sensitivity: SensitivityResult
+    leakage_flags: tuple[LeakageFlag, ...]
+
+    @property
+    def has_fatal_leakage(self) -> bool:
+        return any(flag.is_fatal for flag in self.leakage_flags)
 
 def _assert_no_runtime_surprises() -> None:
     """Guard against a stdlib change silently breaking float canonicalisation."""
