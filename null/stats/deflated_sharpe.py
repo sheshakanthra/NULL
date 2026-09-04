@@ -65,9 +65,16 @@ class DSRResult(NullModel):
     skew: NullFloat
     kurtosis: NullFloat
     """Full kurtosis, not excess. Normal is 3."""
+    expected_max_sharpe_annual: NullFloat
+    """SR_0 annualised. Surfaced as its own diagnostic because it is the quantity
+    behind the selection finding: when the maximum Sharpe that noise alone would
+    produce across N trials exceeds the candidate's own Sharpe, the search cannot
+    distinguish an edge from luck, whatever PBO says."""
     n_obs: int
     n_trials: int
     rationale: NonEmptyStr
+    selection_diagnostic: NonEmptyStr
+    """One sentence, worth more to a reader than the PBO number."""
 
 
 def probabilistic_sharpe_ratio(
@@ -198,6 +205,24 @@ def deflated_sharpe_ratio(
     )
 
     ann = math.sqrt(periods_per_year)
+    sr0_annual = sr0 * ann
+    if n_trials <= 1:
+        diagnostic = (
+            f"With 1 trial over {n_obs:,} observations there was no search, so noise "
+            "alone is not expected to produce any selected maximum; the observed "
+            f"Sharpe of {sr * ann:.2f} stands on its own."
+        )
+    else:
+        verdict = (
+            "the search cannot distinguish this edge from luck"
+            if sr0_annual >= sr * ann
+            else "the observed result clears what luck alone would produce"
+        )
+        diagnostic = (
+            f"With {n_trials:,} trials over {n_obs:,} observations, noise alone is "
+            f"expected to produce a maximum Sharpe of {sr0_annual:.2f}; the candidate "
+            f"showed {sr * ann:.2f}, so {verdict}."
+        )
     return DSRResult(
         observed_sharpe=sr,
         observed_sharpe_annual=sr * ann,
@@ -207,13 +232,15 @@ def deflated_sharpe_ratio(
         variance_was_assumed=assumed,
         skew=skew,
         kurtosis=kurt,
+        expected_max_sharpe_annual=sr0_annual,
         n_obs=n_obs,
         n_trials=n_trials,
+        selection_diagnostic=diagnostic,
         rationale=_build_rationale(
             observed_annual=sr * ann,
             deflated=dsr,
             n_trials=n_trials,
-            sr0_annual=sr0 * ann,
+            sr0_annual=sr0_annual,
             skew=skew,
             kurtosis=kurt,
             n_obs=n_obs,
