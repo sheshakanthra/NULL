@@ -24,27 +24,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from null.benchmark.buyhold import benchmark_check
 from null.contracts import Bar, StrategyRun, TargetWeight
 from null.costs.india_equity import IndiaEquityCostModel
-
-# M2's comparison logic is deliberately unwritten. Two decisions block it and both
-# belong to Sheshakanth, not to this file:
-#
-#   1. Which NIFTY 50 TRI source NULL uses. The official NSE endpoint is real but
-#      refuses plain HTTP clients; see docs/data_sources.md for what was tested
-#      and the five options. Falling back to the price index is NOT one of them --
-#      it hands every strategy ~1.3%/yr of free alpha, the exact bias M2 removes.
-#   2. Whether RegressionResult gains se_method and PerfMetrics gains basis. Both
-#      are frozen-contract changes (invariant 5) and both change what this test
-#      can assert -- see the last two tests in this module.
-#
-# The test is written and was watched to fail with ModuleNotFoundError on
-# null.benchmark.buyhold, per the acceptance-test-first rule. It is skipped rather
-# than left red so CI stays meaningful. Remove this skip when M2 lands.
-pytestmark = pytest.mark.skip(
-    reason="M2 unimplemented: blocked on TRI source and two contract decisions "
-    "(see docs/data_sources.md)"
-)
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "costs_india_equity.yaml"
 IST = timezone(timedelta(hours=5, minutes=30))
