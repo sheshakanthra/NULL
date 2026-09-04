@@ -1,0 +1,15 @@
+# Cached parquet and any fetched data. Never committed -- data fetch is a
+# separate, cached, offline-first stage and `null audit` must run offline.
+data/*
+!data/.gitkeep
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env

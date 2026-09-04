@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "null"
+version = "0.1.0"
+description = "A deterministic strategy audit engine. Default verdict: REJECT."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Sheshakanth" }]
+license = { text = "Proprietary" }
+
+# pandas is the chosen dataframe library (see CLAUDE.md, Code standards). polars
+# is not a dependency and must not become one.
+dependencies = [
+    "pydantic>=2.7",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.11",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.10",
+    "pandas-stubs>=2.2",
+    "types-PyYAML>=6.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["null"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+xfail_strict = true
+filterwarnings = ["error::DeprecationWarning:null.*"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["null"]
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+enable_error_code = [
+    "redundant-expr",
+    "truthy-bool",
+    "ignore-without-code",
+]
+
+[[tool.mypy.overrides]]
+# scipy ships no stubs. Kept narrow on purpose: pandas and numpy are fully typed
+# and must stay that way, because the audit path runs through them.
+module = ["scipy.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
