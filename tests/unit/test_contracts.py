@@ -384,8 +384,9 @@ def test_evidence_hash_must_be_a_sha256_hex_digest() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _metrics() -> PerfMetrics:
+def _metrics(basis: str = "net") -> PerfMetrics:
     return PerfMetrics(
+        basis=basis,  # type: ignore[arg-type]
         cagr=0.12,
         vol_annual=0.18,
         sharpe=0.67,
@@ -420,6 +421,8 @@ def _evidence(**overrides: object) -> Evidence:
             alpha_annual=0.004,
             alpha_stderr=0.01,
             alpha_tstat=0.4,
+            se_method="newey_west",
+            hac_lags=12,
             beta=0.98,
             beta_tstat=31.0,
             r_squared=0.87,
@@ -476,3 +479,73 @@ def test_leakage_flag_carries_a_severity_and_a_human_detail() -> None:
 
 def test_spec_version_is_exported_and_non_empty() -> None:
     assert isinstance(SPEC_VERSION, str) and SPEC_VERSION
+
+
+# ---------------------------------------------------------------------------
+# se_method -- the t-stat estimator must be recorded (contract rev 0.2.0)
+# ---------------------------------------------------------------------------
+
+
+def _regression(**overrides: object) -> RegressionResult:
+    kwargs: dict[str, object] = {
+        "alpha_annual": 0.004,
+        "alpha_stderr": 0.01,
+        "alpha_tstat": 0.4,
+        "se_method": "newey_west",
+        "hac_lags": 12,
+        "beta": 0.98,
+        "beta_tstat": 31.0,
+        "r_squared": 0.87,
+        "n_obs": 1006,
+    }
+    kwargs.update(overrides)
+    return RegressionResult(**kwargs)  # type: ignore[arg-type]
+
+
+def test_se_method_is_required() -> None:
+    """OLS errors on autocorrelated returns inflate the t-stat that drives the gate."""
+    assert RegressionResult.model_fields["se_method"].is_required()
+
+
+def test_newey_west_requires_a_lag_count() -> None:
+    with pytest.raises(ValidationError):
+        _regression(se_method="newey_west", hac_lags=None)
+
+
+def test_ols_forbids_a_lag_count() -> None:
+    """Recording lags on an OLS fit implies a correction that was not applied."""
+    with pytest.raises(ValidationError):
+        _regression(se_method="ols", hac_lags=12)
+    assert _regression(se_method="ols", hac_lags=None).se_method == "ols"
+
+
+def test_unknown_se_method_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _regression(se_method="bootstrap")
+
+
+# ---------------------------------------------------------------------------
+# metric basis -- gross vs net (contract rev 0.2.0)
+# ---------------------------------------------------------------------------
+
+
+def test_perf_metrics_basis_is_required() -> None:
+    assert PerfMetrics.model_fields["basis"].is_required()
+
+
+def test_evidence_rejects_a_mismatched_basis_pair() -> None:
+    """A gross strategy vs a net benchmark reports its own cost drag as alpha."""
+    with pytest.raises(ValidationError) as exc:
+        _evidence(metrics=_metrics("gross"), benchmark_metrics=_metrics("net"))
+    assert "would be reported as alpha" in str(exc.value)
+
+
+def test_evidence_rejects_a_gross_headline_comparison() -> None:
+    """Matched but both gross is still not the comparison BUILD.md §4 asks for."""
+    with pytest.raises(ValidationError):
+        _evidence(metrics=_metrics("gross"), benchmark_metrics=_metrics("gross"))
+
+
+def test_evidence_accepts_a_net_versus_net_comparison() -> None:
+    e = _evidence(metrics=_metrics("net"), benchmark_metrics=_metrics("net"))
+    assert e.metrics.basis == e.benchmark_metrics.basis == "net"

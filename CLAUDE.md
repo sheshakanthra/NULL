@@ -47,6 +47,15 @@ BUILD.md §2 does not answer any of them, so they are recorded here instead.
    `trials` may be empty or a subset and never exceeds `n_trials`; it is **never** a
    substitute for the declared count. When it is empty, the DSR gate must assume a
    variance and its rationale string must say so out loud.
+4. **`RegressionResult.se_method` is required, with `hac_lags` required iff Newey-West.**
+   Added at M2 (spec 0.2.0) after review. Daily strategy returns are autocorrelated and
+   OLS standard errors understate the true SE, inflating `alpha_tstat` — which is the
+   gate. An artifact that does not record which estimator produced the t-stat cannot be
+   audited. Default to Newey-West; OLS is an explicit opt-in the rationale must name.
+5. **`PerfMetrics.basis` is required, and `Evidence` refuses a mismatched pair.**
+   Added at M2 (spec 0.2.0) after review. A gross-basis strategy compared against a
+   net-basis benchmark reports its own cost drag as alpha. The headline comparison must
+   be net-vs-net; gross stays available on `Evidence.gross_returns` for panels.
 
 ## Working rules
 

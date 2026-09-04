@@ -57,10 +57,12 @@ __all__ = [
     "IST",
     "LeakageFlag",
     "LeakageKind",
+    "MetricBasis",
     "NullModel",
     "ParamPoint",
     "PerfMetrics",
     "RegressionResult",
+    "SEMethod",
     "SPEC_VERSION",
     "SensitivityResult",
     "Series",
@@ -72,7 +74,7 @@ __all__ = [
 
 #: Stamped onto every :class:`Verdict`. Bump only when a frozen contract changes,
 #: which is a decision, not a refactor.
-SPEC_VERSION = "0.1.0"
+SPEC_VERSION = "0.2.0"
 
 #: Indian Standard Time. All contract timestamps normalise to this offset so that
 #: the same instant expressed in any zone produces the same bytes.
@@ -402,8 +404,17 @@ class StrategyRun(NullModel):
 # ---------------------------------------------------------------------------
 
 
+MetricBasis = Literal["gross", "net"]
+
+
 class PerfMetrics(NullModel):
     """The metric panel from BUILD.md section 4."""
+
+    basis: MetricBasis
+    """Gross or net of costs. Required, because comparing a gross-basis strategy
+    against a net-basis benchmark manufactures alpha exactly equal to the cost
+    drag -- on a monthly-turnover strategy, several percent a year of pure
+    fiction. :class:`Evidence` refuses to hold a mismatched pair."""
 
     cagr: NullFloat
     vol_annual: NonNegativeFloat
@@ -425,6 +436,9 @@ class PerfMetrics(NullModel):
     n_obs: int = Field(ge=0)
 
 
+SEMethod = Literal["ols", "newey_west"]
+
+
 class RegressionResult(NullModel):
     """Strategy excess returns regressed on benchmark excess returns.
 
@@ -434,10 +448,40 @@ class RegressionResult(NullModel):
     alpha_annual: NullFloat
     alpha_stderr: NonNegativeFloat
     alpha_tstat: NullFloat
+
+    se_method: SEMethod
+    """Which standard errors produced ``alpha_tstat``. Required.
+
+    Daily strategy returns are autocorrelated -- momentum and mean-reversion both
+    induce it -- and OLS standard errors understate the true SE under
+    autocorrelation, inflating the t-stat. The gate is ``alpha_tstat >= 2.0``, so
+    the estimator choice changes verdicts. An artifact that does not say which was
+    used cannot be audited, which would make NULL guilty of the failure it exists
+    to catch."""
+
+    hac_lags: int | None = Field(default=None, ge=0)
+    """Newey-West lag truncation. Required when ``se_method`` is newey_west,
+    forbidden otherwise -- two HAC runs with different lags give different t-stats
+    and must not be indistinguishable in the artifact."""
+
     beta: NullFloat
     beta_tstat: NullFloat
     r_squared: Probability
     n_obs: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _check_se_method(self) -> Self:
+        if self.se_method == "newey_west" and self.hac_lags is None:
+            raise ValueError(
+                "se_method is newey_west but hac_lags is unset; the lag count "
+                "changes the t-stat and must be recorded"
+            )
+        if self.se_method == "ols" and self.hac_lags is not None:
+            raise ValueError(
+                f"se_method is ols but hac_lags is {self.hac_lags}; OLS has no lag "
+                "truncation and recording one implies a correction that was not applied"
+            )
+        return self
 
 
 class FoldResult(NullModel):
@@ -539,6 +583,29 @@ class Evidence(NullModel):
     regimes: dict[str, PerfMetrics]
     sensitivity: SensitivityResult
     leakage_flags: tuple[LeakageFlag, ...]
+
+    @model_validator(mode="after")
+    def _check_comparable_basis(self) -> Self:
+        """The headline comparison must be net-vs-net, and must be the same on both sides.
+
+        A gross strategy measured against a net benchmark shows alpha exactly
+        equal to its own cost drag. That is not an edge, it is an accounting
+        error, and it is the single easiest way to make a dead strategy look
+        alive. Making it unconstructible is cheaper than catching it in review.
+        """
+        if self.metrics.basis != self.benchmark_metrics.basis:
+            raise ValueError(
+                f"strategy metrics are {self.metrics.basis}-basis but benchmark "
+                f"metrics are {self.benchmark_metrics.basis}-basis; the difference "
+                "between them would be reported as alpha"
+            )
+        if self.metrics.basis != "net":
+            raise ValueError(
+                "the headline comparison must be net of everything, got "
+                f"{self.metrics.basis}. Gross returns remain available on "
+                "gross_returns for evidence panels."
+            )
+        return self
 
     @property
     def has_fatal_leakage(self) -> bool:
