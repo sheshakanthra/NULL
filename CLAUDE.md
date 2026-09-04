@@ -27,6 +27,22 @@ prove it. Default verdict is REJECT. It is a prosecutor, not a backtester.
 7. **`n_trials` is required and non-defaulted.** Never give it a default value, never infer
    it, never let it be optional "for now."
 
+## Frozen contract decisions (settled at M0 — do not re-litigate)
+
+These shape `contracts.py` and were decided by Sheshakanth before it was written.
+BUILD.md §2 does not answer any of them, so they are recorded here instead.
+
+1. **`Series` is a Pydantic model, not a `pandas.Series`.** Parallel frozen tuples of
+   tz-aware timestamps and floats, strictly increasing in time. A pandas object is
+   mutable and its byte representation depends on pandas internals, so neither can back
+   `evidence_hash`. Compute converts at the boundary via `to_numpy()` / `to_pandas()` /
+   `from_pandas()`. Do not push a DataFrame through a contract.
+2. **Floats are quantised to 12 significant digits on validation, and non-finite floats
+   are rejected.** Different BLAS builds disagree in the last bits of a float, and one
+   such bit would flip the verdict hash. NaN and infinity are rejected for the same
+   reason as invariant 6: missing evidence must fail loudly, never serialise into an
+   artifact as a silent hole.
+
 ## Working rules
 
 - **One milestone per session.** Do not start M2 because M1 finished early. Stop and report.
