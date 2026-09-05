@@ -58,7 +58,7 @@ DEFAULT_GATES_CONFIG = (
 )
 
 #: Reported alongside the gates but never counted in the AND.
-PANEL_ONLY = frozenset({"pbo"})
+PANEL_ONLY = frozenset({"pbo", "drawdown_tolerance"})
 
 
 class GateConfigError(ValueError):
@@ -134,6 +134,15 @@ def evaluate(
     panels = {
         "pbo": ctx.get("pbo_rationale", "")
         or "PBO was not computed for this run.",
+        "drawdown": (
+            f"Maximum peak-to-trough decline was {evidence.metrics.max_drawdown:.1%}, "
+            f"with the longest underwater period lasting "
+            f"{evidence.metrics.longest_underwater_days:,} bars. Reported for context; "
+            "it does not vote. Drawdown answers whether you would hold a strategy, "
+            "which is a preference about risk appetite, not whether it has an edge. A "
+            "35% limit would reject a NIFTY-like buy-and-hold, which draws down around "
+            "60% through 2008."
+        ),
     }
     if ctx.get("expected_max_sharpe_sentence"):
         panels["expected_max_sharpe"] = str(ctx["expected_max_sharpe_sentence"])

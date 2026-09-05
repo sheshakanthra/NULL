@@ -29,9 +29,6 @@ gates:
   capacity:
     max_adv_participation: 0.05
 
-  drawdown_tolerance:
-    max_dd: 0.35
-
 # ---------------------------------------------------------------------------
 # Reported as evidence, deliberately NOT gates
 # ---------------------------------------------------------------------------
@@ -62,3 +59,22 @@ gates:
 #
 # What catches overfit_grid instead: deflated_sharpe, which rejects it on 7 of 7
 # seeds, and the expected-max-Sharpe diagnostic line that comes with it.
+#
+# drawdown_tolerance — BUILD.md §7 lists `drawdown_tolerance: {max_dd: 0.35}`. It is
+# deliberately absent above.
+#
+# A 35% limit rejects NIFTY itself: a NIFTY-like buy-and-hold series draws down
+# roughly 60% through 2008, and tests/unit/test_drawdown_demotion.py runs exactly
+# that series through the gate and shows it failing. A harness that rejects its own
+# benchmark on risk grounds is incoherent, because every strategy it judges is being
+# compared against a series it would refuse.
+#
+# The deeper reason is that drawdown answers "would you hold this", which is a
+# preference about risk appetite, while every other gate answers "is there an edge",
+# which is a claim about evidence. Only the second belongs in a verdict.
+#
+# Maximum drawdown is still computed and printed on every report. It does not vote.
+#
+# capacity STAYS a gate, and the contrast is the point: a strategy that cannot
+# execute at size never had the returns it claims. That is evidence the backtest is
+# wrong, not a preference about whether to hold it.

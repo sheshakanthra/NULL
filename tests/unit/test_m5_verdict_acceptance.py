@@ -159,7 +159,7 @@ def test_config_drives_the_gate_list(built) -> None:
     report, _, _ = built
     configured = set(load_gate_config())
     assert {g.name for g in report.verdict.gates} == configured
-    assert len(configured) == 8
+    assert len(configured) == 7  # drawdown_tolerance demoted to a panel
 
 
 def test_pbo_is_never_in_the_gate_list(built) -> None:
