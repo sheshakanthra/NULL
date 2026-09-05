@@ -54,6 +54,7 @@ __all__ = [
     "FLOAT_SIGNIFICANT_DIGITS",
     "FoldResult",
     "GateResult",
+    "GateState",
     "IST",
     "LeakageFlag",
     "LeakageKind",
@@ -74,7 +75,7 @@ __all__ = [
 
 #: Stamped onto every :class:`Verdict`. Bump only when a frozen contract changes,
 #: which is a decision, not a refactor.
-SPEC_VERSION = "0.2.0"
+SPEC_VERSION = "0.3.0"
 
 #: Indian Standard Time. All contract timestamps normalise to this offset so that
 #: the same instant expressed in any zone produces the same bytes.
@@ -616,6 +617,9 @@ class Evidence(NullModel):
 # ---------------------------------------------------------------------------
 
 
+GateState = Literal["PASS", "FAIL", "NOT_COMPUTABLE"]
+
+
 class GateResult(NullModel):
     """The outcome of one gate.
 
@@ -624,10 +628,26 @@ class GateResult(NullModel):
     """
 
     name: NonEmptyStr
+    state: GateState
+    """Three states, not two. NOT_COMPUTABLE means the gate could not run at all --
+    the evidence it needs was absent -- as opposed to running and failing. A reader
+    must be able to tell those apart, because "we could not check" and "we checked
+    and it failed" are different claims about a strategy. It never reads as PASS:
+    ``passed`` is False for both FAIL and NOT_COMPUTABLE, and the validator below
+    makes disagreement between the two fields unconstructible."""
     passed: bool
     observed: NullFloat | str
     threshold: NullFloat | str
     rationale: NonEmptyStr
+
+    @model_validator(mode="after")
+    def _check_state_agrees_with_passed(self) -> Self:
+        if self.passed != (self.state == "PASS"):
+            raise ValueError(
+                f"gate {self.name!r} has state {self.state} but passed={self.passed}; "
+                "a gate that did not pass must never be constructible as passing"
+            )
+        return self
 
 
 class Verdict(NullModel):

@@ -124,6 +124,25 @@ def test_series_is_frozen() -> None:
         Series(ts=(_ts(2),), values=(1.0,)).values = (9.0,)  # type: ignore[misc]
 
 
+def test_not_computable_is_never_constructible_as_passing() -> None:
+    """A gate that could not run must never read as a pass (spec 0.3.0)."""
+    ok = GateResult(
+        name="capacity", state="NOT_COMPUTABLE", passed=False,
+        observed="not computable", threshold="n/a", rationale="no ADV data",
+    )
+    assert ok.passed is False
+    with pytest.raises(ValidationError):
+        GateResult(
+            name="capacity", state="NOT_COMPUTABLE", passed=True,
+            observed="not computable", threshold="n/a", rationale="no ADV data",
+        )
+    with pytest.raises(ValidationError):
+        GateResult(
+            name="g", state="PASS", passed=False,
+            observed=1.0, threshold=0.5, rationale="disagreeing fields",
+        )
+
+
 def test_unknown_fields_are_rejected() -> None:
     with pytest.raises(ValidationError):
         _run(sharpe_i_wish_i_had=3.0)
@@ -297,6 +316,7 @@ def test_bar_rejects_impossible_ohlc(overrides: dict[str, object]) -> None:
 def _gate(passed: bool, name: str = "deflated_sharpe") -> GateResult:
     return GateResult(
         name=name,
+        state="PASS" if passed else "FAIL",
         passed=passed,
         observed=0.31,
         threshold=0.95,
@@ -307,12 +327,16 @@ def _gate(passed: bool, name: str = "deflated_sharpe") -> GateResult:
 def test_gate_rationale_may_not_be_empty() -> None:
     """The rationale strings are the product (CLAUDE.md, code standards)."""
     with pytest.raises(ValidationError):
-        GateResult(name="g", passed=False, observed=1.0, threshold=2.0, rationale="   ")
+        GateResult(
+            name="g", state="FAIL", passed=False, observed=1.0, threshold=2.0,
+            rationale="   ",
+        )
 
 
 def test_gate_observed_and_threshold_accept_floats_or_strings() -> None:
     g = GateResult(
         name="leakage_clean",
+        state="FAIL",
         passed=False,
         observed="oracle_lookahead",
         threshold="no fatal flags",
