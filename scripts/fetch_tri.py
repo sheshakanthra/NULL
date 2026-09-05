@@ -155,6 +155,15 @@ def write_cache(rows: list[dict[str, Any]], *, fetched_on: datetime) -> None:
                     "or block without notice. This parquet is committed so the demo "
                     "stays reproducible if it does."
                 ),
+                "endpoint_shape_is_provenance": (
+                    "The URL, method and cinfo payload format recorded here are "
+                    "themselves provenance and may need re-capture. A response of "
+                    "HTTP 200 with Content-Type text/html and a large body is the "
+                    "PAGE RENDERING, not a rejection -- it means the request never "
+                    "reached the ScriptService method, so the endpoint path or payload "
+                    "format has moved. That is a signal to re-capture the live request "
+                    "from a browser, NOT to try more headers, sessions or user agents."
+                ),
             },
             indent=2,
             sort_keys=True,
