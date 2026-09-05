@@ -164,7 +164,13 @@ def audit_leakage(
             "only; without an action calendar an unadjusted split cannot be confirmed.",
             "nan_forward_fill: NULL receives realised weights, not indicator code, so a "
             "forward-fill across a data gap is not observable from this input.",
-            "universe_rebalance_timing: requires index reconstitution effective dates, "
-            "same missing source as point_in_time_constituency.",
+            "universe_rebalance_timing: requires index reconstitution effective "
+            "dates, same missing source as point_in_time_constituency. NIFTY 50 "
+            "reviews use data for the six months ending January and July and are "
+            "implemented on the first working day after F&O expiry in March and "
+            "September, with four weeks' notice to the market. That notice window is "
+            "precisely the exposure: applying membership on the ANNOUNCEMENT date "
+            "rather than the effective date hands a strategy four weeks of foresight, "
+            "twice a year, on exactly the stocks about to receive index-fund flows.",
         ),
     )

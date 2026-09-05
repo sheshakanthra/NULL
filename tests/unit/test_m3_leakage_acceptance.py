@@ -28,6 +28,7 @@ import pytest
 from null.contracts import Bar, StrategyRun, TargetWeight
 from null.costs.india_equity import IndiaEquityCostModel
 from null.verdict.engine import AuditStage, run_audit
+from tests.golden.fixtures import oracle_lookahead_run as oracle_lookahead
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "costs_india_equity.yaml"
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -58,30 +59,6 @@ def _bars() -> tuple[Bar, ...]:
             )
         )
     return tuple(out)
-
-
-def oracle_lookahead(bars: tuple[Bar, ...]) -> StrategyRun:
-    """Buys at t using the close of t+1. The fixture from BUILD.md section 8.
-
-    It declares ``decision_lag_bars=1``, so it looks honest at the contract level.
-    The only evidence of cheating is that its weights predict the future perfectly,
-    which is what the audit has to notice.
-    """
-    weights: list[TargetWeight] = []
-    for i in range(len(bars) - 1):
-        forward_up = bars[i + 1].close > bars[i].close
-        weights.append(
-            TargetWeight(ts=bars[i].ts, symbol=SYMBOL, weight=1.0 if forward_up else 0.0)
-        )
-    return StrategyRun(
-        strategy_id="oracle_lookahead",
-        param_hash="oracle",
-        n_trials=1,
-        universe=(SYMBOL,),
-        weights=tuple(weights),
-        decision_lag_bars=1,
-        initial_capital=1_000_000.0,
-    )
 
 
 def honest_strategy(bars: tuple[Bar, ...]) -> StrategyRun:
