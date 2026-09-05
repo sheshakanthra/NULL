@@ -1,3 +1,62 @@
+# STATUS: TRI source decided, loader built, DATA NOT YET FETCHED
+
+**Decision (Sheshakanth):** NIFTY 50 TRI comes from NSE Indices directly, via
+`POST niftyindices.com/Backpage.aspx/getTotalReturnIndexString`. Authoritative
+publisher, no proxy caveat. The ETF-NAV proxy option is dropped. The price index is
+not a fallback and is unreachable in code, not merely deprecated.
+
+**Blocker: the endpoint refuses this environment.** `scripts/fetch_tri.py` is
+written, correct and ready. Run against a single 10-day window it returns HTTP 200
+with `Content-Type: text/html` and 93,810 bytes -- the page, not the web-method
+response. That is byte-identical to three earlier attempts in the same session
+using a bare POST, a cookie-bootstrapped session, and a full browser header set
+with a valid `ASP.NET_SessionId`. A control POST to httpbin and postman-echo echoes
+correctly, so the sandbox is not the constraint; Akamai fronts niftyindices and
+serves the page to clients without a full browser fingerprint.
+
+**Consequence:** no parquet is committed, so the validation gate below has not run
+against real data and `null audit` has no benchmark series. Nothing has been
+fabricated to fill the gap.
+
+**To unblock:** run `python scripts/fetch_tri.py --refresh` from an environment that
+can reach the site (an ordinary desktop browser session usually can), then commit
+`data/reference/nifty50_tri.parquet` and its `.provenance.json` sidecar. The loader
+and validator are already wired to it, and
+`tests/unit/test_tri_loader.py::test_committed_cache_loads_and_validates` unskips
+itself the moment the file exists.
+
+## What is built and tested
+
+`scripts/fetch_tri.py` -- network stage, outside `null/` because invariant 2 forbids
+network imports there. Sequential year-by-year chunks, 2s between requests, at most
+two retries with 15s backoff, never parallel. Writes the parquet plus a provenance
+sidecar recording the URL, method, exact payload shape, user agent, fetch date, row
+count and date range.
+
+`null/benchmark/tri.py` -- offline loader. Reads the committed parquet, imports
+nothing that can reach a network (asserted by test), and **raises** when the cache
+is absent rather than falling back. The exception message carries the 1.35%/yr
+figure so the reason is unavoidable.
+
+`validate_tri_against_pri` -- two independent checks, because either alone passes
+the wrong series. Monotonic dominance over multi-year windows, since dividends are
+never negative; and magnitude, since a series can dominate by 0.1%/yr or 6%/yr and
+still not be NIFTY 50 TRI. Tested against a correct TRI, a price index passed off as
+TRI, a series dominating by too much, one dominating by too little, and one with an
+occasional violation.
+
+## The figure that goes on every report
+
+NSE reports **11.09%** annualised for the NIFTY 50 price index against **12.44%**
+for total return over the 20 years to February 2026. The **1.35%/yr** gap is
+dividends. Benchmarking against the price index hands a strategy every basis point
+of it, which is why there is no fallback. If a caller supplies a non-TRI benchmark,
+the limitations band on the report carries these numbers.
+
+---
+
+*The original investigation follows.*
+
 # Data sources — open questions and what has actually been tested
 
 Status as of M2 start. **The NIFTY 50 TRI question is NOT settled.** Nothing in

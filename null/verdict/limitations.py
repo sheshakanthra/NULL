@@ -63,10 +63,13 @@ def _benchmark_series_unconfirmed(
         key="benchmark_series",
         severity="blocking",
         text=(
-            "The benchmark series is supplied by the caller and NULL does not select "
-            "it. It has not been confirmed as a total-return index. If it is a price "
-            "index, roughly 1.2-1.5%/yr of dividends are missing from the benchmark "
-            "and every alpha figure here is overstated by that much."
+            "The benchmark series has NOT been confirmed as a total-return index. If "
+            "it is the NIFTY price index, the alpha above is overstated by roughly "
+            "1.35%/yr: NSE reports 11.09% annualised for the price index against "
+            "12.44% for total return over the 20 years to February 2026, and that gap "
+            "is dividends the price index omits. NULL never substitutes the price "
+            "index on its own -- a missing TRI raises rather than falling back -- so "
+            "this warning means a caller supplied one."
         ),
     )
 
