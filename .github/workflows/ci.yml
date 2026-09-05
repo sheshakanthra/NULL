@@ -37,6 +37,33 @@ jobs:
       - name: other source invariants (network, credentials, wall-clock)
         run: pytest tests/unit/test_source_invariants.py -v
 
+  runtime-deps:
+    # Installs the package with NO dev extras, then imports every module and runs
+    # the CLI. A missing RUNTIME dependency fails here, on the commit that
+    # introduced it, rather than several commits later when a test happens to touch
+    # the code path.
+    #
+    # This job exists because pyarrow went undeclared for three commits: the TRI
+    # loader needed it, every test touching parquet was skipped for missing data,
+    # and CI stayed green until the OHLCV loader wrote an actual file.
+    name: runtime deps only (no dev extras)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - name: install runtime dependencies only
+        run: pip install .
+      - name: import every module and probe parquet
+        # From /tmp so the installed package is imported, not the source tree.
+        working-directory: /tmp
+        run: python $GITHUB_WORKSPACE/scripts/check_runtime_deps.py
+      - name: the CLI runs
+        working-directory: /tmp
+        run: null --version
+
   typecheck:
     name: mypy --strict
     runs-on: ubuntu-latest

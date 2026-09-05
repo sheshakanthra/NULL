@@ -79,6 +79,19 @@ These are enforced by tests, not by intent:
   `Evidence` holding a gross-basis strategy against a net-basis benchmark, which
   would report its own cost drag as alpha.
 
+## What auditing NULL turned up
+
+Four defects found in NULL itself, every one hidden behind a passing test:
+a fixture that passed on the sign of floating-point noise, a one-bar look-ahead in
+the module that detects look-ahead, look-ahead written into the fixture built to
+test for it, and an undeclared dependency invisible to a suite whose only covering
+test was skipped. Two of them share a shape worth naming — a test that existed,
+passed, and was structurally unable to fail.
+
+Written up in [docs/findings.md](docs/findings.md), and destined for the M7 report.
+A tool arguing that unaudited output should not be trusted has no business
+concealing its own history of exactly that.
+
 ## Known data limitations
 
 Beyond the TRI question above:

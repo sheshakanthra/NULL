@@ -17,6 +17,12 @@ dependencies = [
     "pydantic>=2.7",
     "numpy>=1.26",
     "pandas>=2.2",
+    # Hard runtime dependency, not optional. pandas cannot read or write parquet
+    # without an engine, and every committed cache is parquet. A lower bound rather
+    # than an exact pin: an exact pin fights the 3.11/3.14 matrix, and the format is
+    # stable above this floor. pyarrow specifically for its better-covered dtype and
+    # timestamp round-tripping, which the IST / ISO-8601 contract depends on.
+    "pyarrow>=15",
     "scipy>=1.11",
     "pyyaml>=6.0",
 ]

@@ -80,6 +80,48 @@ def test_the_loader_imports_nothing_that_can_reach_the_network() -> None:
         assert banned not in source
 
 
+def test_the_parquet_round_trip_works_without_any_real_data(tmp_path) -> None:
+    """CI coverage for the parquet path that does NOT depend on a fetched cache.
+
+    This test exists because of a real failure. Every TRI test that touched parquet
+    was skipped for missing data, so the commit that introduced the TRI loader went
+    green while pyarrow -- which pandas needs to read or write parquet at all -- was
+    undeclared in pyproject. The gap only surfaced two commits later when the OHLCV
+    loader added tests that actually write a file.
+
+    A synthetic frame round-tripping through to_parquet/read_parquet needs no
+    external data, so this path is covered whether or not any cache exists.
+    """
+    import pandas as pd
+
+    base = datetime(2020, 1, 1, 15, 30, tzinfo=IST)
+    frame = pd.DataFrame(
+        {
+            "date": [base + timedelta(days=i) for i in range(10)],
+            "tri": [20_000.0 * (1.0 + 0.001 * i) for i in range(10)],
+        }
+    )
+    path = tmp_path / "tiny_tri.parquet"
+    frame.to_parquet(path, index=False)
+
+    series = load_nifty50_tri(path)
+    assert len(series) == 10
+    assert series.values[0] == pytest.approx(20_000.0)
+    # The IST / ISO-8601 contract depends on timestamps surviving the round trip.
+    assert series.ts[0].utcoffset() == timedelta(hours=5, minutes=30)
+    assert series.ts[0].hour == 15 and series.ts[0].minute == 30
+    assert list(series.ts) == sorted(series.ts)
+
+
+def test_a_parquet_engine_is_actually_installed() -> None:
+    """Fails loudly rather than as an ImportError inside an unrelated test."""
+    import pyarrow  # noqa: F401
+
+    import pandas as pd
+
+    assert pd.io.parquet.get_engine("auto") is not None
+
+
 @pytest.mark.skipif(
     not DEFAULT_CACHE.exists(),
     reason="TRI parquet not committed yet -- the endpoint refuses this environment",
