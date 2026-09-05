@@ -4,21 +4,38 @@ BUILD.md section 4, the non-negotiable rules:
 
   1. The benchmark is NIFTY 50 **TRI**, not the price index. **NULL does not
      choose that series.** ``benchmark_check`` takes benchmark bars as a
-     parameter and never fetches or selects them -- the source is an unresolved
-     decision recorded in docs/data_sources.md, and quietly defaulting to the
-     price index would hand every strategy ~1.3%/yr of free alpha, which is the
-     bias this module exists to remove.
+     parameter and never fetches or selects them -- see null/benchmark/tri.py,
+     which raises rather than falling back, because quietly defaulting to the
+     price index would hand every strategy ~1.35%/yr of free alpha.
   2. The benchmark pays entry cost once, through the same ``CostModel``. Not zero.
   3. Same capital, same period, same currency.
   4. Risk-match before comparing (see risk_match.py).
   5. Report net_of_everything CAGR side by side with a one-line verdict sentence.
+
+Portfolio accounting handles any number of symbols. The single-symbol case is this
+same path with a one-column matrix, not a separate branch.
+
+Three things about the aggregation that are easy to get quietly wrong:
+
+  * **A symbol with no bar on a date contributes zero, never NaN**, and never
+    shortens the series. Listings and delistings must not silently drop days for
+    every other holding.
+  * **Weights need not sum to one.** The remainder is cash and earns nothing. That
+    is not an error state, it is how a long-only signal strategy behaves whenever
+    it has no signal.
+  * **Costs are charged per symbol, never on the portfolio aggregate.** The DP
+    charge is flat per scrip per day on delivery sells, so fifty names rebalancing
+    owe fifty fees. Costing the aggregate would undercount that fiftyfold and make
+    a wide portfolio look cheap to run.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 import numpy as np
+import numpy.typing as npt
 
 from null.benchmark.risk_match import regress_excess_returns, risk_match_benchmark
 from null.contracts import (
@@ -50,6 +67,8 @@ class BenchmarkEvidence(NullModel):
     """Everything section 4 asks to be reported, plus the gate it drives."""
 
     strategy_returns: Series
+    strategy_gross_returns: Series
+    """Before costs. Kept so the aggregation can be checked analytically."""
     benchmark_returns: Series
     benchmark_returns_risk_matched: Series
     metrics: PerfMetrics
@@ -58,6 +77,12 @@ class BenchmarkEvidence(NullModel):
     risk_match_scale: NullFloat
     benchmark_entry_cost: NonNegativeFloat
     strategy_total_cost: NonNegativeFloat
+    cost_breakdown: dict[str, NonNegativeFloat]
+    """Per charge component, summed across symbols and days."""
+    max_adv_participation: NonNegativeFloat
+    """Worst single order across ALL symbols and days, never the mean. One illiquid
+    name at 40% of ADV invalidates the whole run, and an average would hide it."""
+    n_symbols: int
     rates_are_verified: bool
     limitations_text: NonEmptyStr
     gate: GateResult
@@ -77,7 +102,7 @@ class BenchmarkEvidence(NullModel):
 
 
 def _bar_returns(bars: tuple[Bar, ...]) -> Series:
-    """Close-to-close simple returns. First bar has no prior close, so it is dropped."""
+    """Close-to-close simple returns for a single-symbol series."""
     if len(bars) < 2:
         raise ValueError(f"need at least 2 bars to compute returns, got {len(bars)}")
     closes = np.asarray([b.close for b in bars], dtype=np.float64)
@@ -85,30 +110,79 @@ def _bar_returns(bars: tuple[Bar, ...]) -> Series:
         raise ValueError("non-positive close price; returns would be undefined")
     rets = closes[1:] / closes[:-1] - 1.0
     return Series(
-        ts=tuple(b.ts for b in bars[1:]),
-        values=tuple(float(x) for x in rets),
+        ts=tuple(b.ts for b in bars[1:]), values=tuple(float(x) for x in rets)
     )
 
 
-def _weight_series(run: StrategyRun, bars: tuple[Bar, ...], symbol: str) -> np.ndarray:
-    """Target weight in force for each return bar, after applying decision lag.
+def _timeline(bars: tuple[Bar, ...]) -> tuple[datetime, ...]:
+    """Every distinct bar timestamp, sorted. The portfolio's common calendar.
 
-    A weight decided on bar t may not act on the return of bar t (that is the
-    look-ahead M3 audits for). It applies from bar t + decision_lag_bars.
+    The union rather than the intersection: a symbol that lists midway through, or
+    delists, must not shorten the series for everything else.
     """
-    ts_index = {b.ts: i for i, b in enumerate(bars)}
-    held = np.zeros(len(bars), dtype=np.float64)
-    for w in run.weights:
-        if w.symbol != symbol:
+    return tuple(sorted({b.ts for b in bars}))
+
+
+def _panel(
+    bars: tuple[Bar, ...], timeline: tuple[datetime, ...], universe: tuple[str, ...]
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Close-price and ADV matrices, shape (dates, symbols), NaN where absent."""
+    row = {ts: i for i, ts in enumerate(timeline)}
+    col = {sym: j for j, sym in enumerate(universe)}
+    prices = np.full((len(timeline), len(universe)), np.nan, dtype=np.float64)
+    adv = np.full((len(timeline), len(universe)), np.nan, dtype=np.float64)
+    for bar in bars:
+        j = col.get(bar.symbol)
+        if j is None:
             continue
-        i = ts_index.get(w.ts)
-        if i is None:
+        prices[row[bar.ts], j] = bar.close
+        if bar.adv_20 is not None:
+            adv[row[bar.ts], j] = bar.adv_20
+    return prices, adv
+
+
+def _returns_matrix(prices: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Close-to-close returns, ZERO wherever either end is missing.
+
+    Zero, not NaN. A symbol that is not trading contributes nothing; it must not
+    poison the whole day's portfolio return.
+    """
+    prev, curr = prices[:-1], prices[1:]
+    valid = np.isfinite(prev) & np.isfinite(curr) & (prev > 0.0)
+    out = np.zeros_like(curr)
+    np.divide(curr - prev, prev, out=out, where=valid)
+    return out
+
+
+def _weights_matrix(
+    run: StrategyRun, timeline: tuple[datetime, ...], universe: tuple[str, ...]
+) -> npt.NDArray[np.float64]:
+    """Target weight per (return bar, symbol), after the decision lag.
+
+    A weight decided on bar t applies from t + decision_lag_bars and persists until
+    changed.
+    """
+    row = {ts: i for i, ts in enumerate(timeline)}
+    col = {sym: j for j, sym in enumerate(universe)}
+    held = np.zeros((len(timeline), len(universe)), dtype=np.float64)
+    for weight in run.weights:
+        j = col.get(weight.symbol)
+        i = row.get(weight.ts)
+        if j is None or i is None:
             continue
         start = i + run.decision_lag_bars
-        if start < len(bars):
-            held[start:] = w.weight
-    # Return series drops the first bar, so weights align to bars[1:].
-    return held[1:]
+        if start < len(timeline):
+            held[start:, j] = weight.weight
+
+    # held[k] is the position in force AT bar k. The return from bar k to bar k+1
+    # is earned by the position held at bar k, so the alignment is held[:-1].
+    #
+    # held[1:] would pair the weight in force at the END of a period with the
+    # return earned DURING it -- a one-bar look-ahead. It survived from M2 to here
+    # because every fixture that exercised this path held a constant weight, and a
+    # constant weight is identical under both alignments. The analytic two-symbol
+    # test is what distinguishes them.
+    return held[:-1]
 
 
 def benchmark_check(
@@ -122,64 +196,78 @@ def benchmark_check(
     risk_free_per_period: float = 0.0,
     periods_per_year: int = TRADING_DAYS,
 ) -> BenchmarkEvidence:
-    """Compare a strategy to buy-and-hold, net of everything, risk-matched.
+    """Compare a portfolio to buy-and-hold, net of everything, risk-matched."""
+    universe = tuple(run.universe)
+    timeline = _timeline(bars)
+    if len(timeline) < 2:
+        raise ValueError(f"need at least 2 bar dates, got {len(timeline)}")
 
-    ``benchmark_bars`` is a parameter and is never sourced here. See the module
-    docstring.
-    """
-    if len(run.universe) != 1:
-        raise NotImplementedError(
-            f"M2 compares single-symbol runs; got {len(run.universe)} symbols. "
-            "Multi-symbol portfolio accounting arrives with the full audit pipeline."
-        )
-    symbol = run.universe[0]
+    prices, adv = _panel(bars, timeline, universe)
+    asset_returns = _returns_matrix(prices)
+    weights = _weights_matrix(run, timeline, universe)
 
-    asset = _bar_returns(bars)
-    bench_gross = _bar_returns(benchmark_bars)
-    weights = _weight_series(run, bars, symbol)
+    # Portfolio gross return: the weighted sum across symbols. Whatever the weights
+    # do not account for is cash, which earns zero and so is simply absent from
+    # this sum rather than modelled as a position.
+    gross = np.einsum("ij,ij->i", weights, asset_returns)
 
-    gross = asset.to_numpy() * weights
-
-    # --- costs ---------------------------------------------------------------
-    # Turnover charged whenever the target weight moves. Entry is the first move,
-    # from flat, and it is charged like any other.
-    adv = np.mean([b.adv_20 for b in bars if b.adv_20 is not None] or [0.0])
-    price = float(bars[0].close)
+    # --- costs, charged PER SYMBOL -------------------------------------------
     equity = run.initial_capital
-
-    prev_w = 0.0
-    cost_drag = np.zeros_like(gross)
+    cost_drag = np.zeros(gross.shape[0], dtype=np.float64)
+    breakdown: dict[str, float] = {}
     total_cost = 0.0
-    for i, w in enumerate(weights):
-        delta = abs(float(w) - prev_w)
-        if delta > 0.0:
+    worst_participation = 0.0
+    previous = np.zeros(len(universe), dtype=np.float64)
+
+    for i in range(weights.shape[0]):
+        row_price = prices[i + 1]
+        row_adv = adv[i + 1]
+        day_cost = 0.0
+        for j, symbol in enumerate(universe):
+            delta = abs(float(weights[i, j]) - float(previous[j]))
+            if delta <= 0.0:
+                continue
+            price = float(row_price[j])
+            if not np.isfinite(price) or price <= 0.0:
+                continue
             traded = delta * equity
-            qty = traded / price if price > 0.0 else 0.0
+            symbol_adv = float(row_adv[j])
+            has_adv = np.isfinite(symbol_adv) and symbol_adv > 0.0
+            if has_adv:
+                worst_participation = max(worst_participation, traded / symbol_adv)
             charge = costs.charge(
                 symbol=symbol,
-                side=Side.BUY if float(w) > prev_w else Side.SELL,
-                quantity=qty,
+                side=Side.BUY if weights[i, j] > previous[j] else Side.SELL,
+                quantity=traded / price,
                 price=price,
                 segment=segment,
                 sigma_daily=sigma_daily,
-                adv_20=float(adv),
+                adv_20=symbol_adv if has_adv else 1.0,
             )
-            cost_drag[i] = charge.total / equity if equity > 0.0 else 0.0
-            total_cost += charge.total
-        prev_w = float(w)
+            day_cost += charge.total
+            for component, value in charge.as_dict().items():
+                breakdown[component] = breakdown.get(component, 0.0) + value
+        cost_drag[i] = day_cost / equity if equity > 0.0 else 0.0
+        total_cost += day_cost
+        previous = weights[i].copy()
 
     net = gross - cost_drag
-    strategy_returns = Series(ts=asset.ts, values=tuple(float(x) for x in net))
+    return_ts = timeline[1:]
+    strategy_returns = Series(ts=return_ts, values=tuple(float(x) for x in net))
+    strategy_gross = Series(ts=return_ts, values=tuple(float(x) for x in gross))
 
     # --- benchmark pays its entry cost once (rule 2) --------------------------
+    bench_gross = _bar_returns(benchmark_bars)
+    bench_price = float(benchmark_bars[0].close)
+    bench_adv = benchmark_bars[0].adv_20 or 1.0
     bench_entry = costs.charge(
-        symbol=symbol,
+        symbol=benchmark_bars[0].symbol,
         side=Side.BUY,
-        quantity=run.initial_capital / price if price > 0.0 else 0.0,
-        price=price,
+        quantity=run.initial_capital / bench_price if bench_price > 0.0 else 0.0,
+        price=bench_price,
         segment=segment,
         sigma_daily=sigma_daily,
-        adv_20=float(adv),
+        adv_20=float(bench_adv),
     )
     bench_net = bench_gross.to_numpy().copy()
     if bench_net.size and run.initial_capital > 0.0:
@@ -188,7 +276,7 @@ def benchmark_check(
         ts=bench_gross.ts, values=tuple(float(x) for x in bench_net)
     )
 
-    # --- risk matching and regression (rule 4) --------------------------------
+    # --- risk matching and regression, unchanged from M2 ----------------------
     matched, scale = risk_match_benchmark(
         strategy_returns, benchmark_returns, periods_per_year=periods_per_year
     )
@@ -199,13 +287,14 @@ def benchmark_check(
         periods_per_year=periods_per_year,
     )
 
-    turnover = float(np.abs(np.diff(np.concatenate([[0.0], weights]))).sum())
-    years = max(len(weights) / periods_per_year, 1e-9)
+    turnover = float(np.abs(np.diff(weights, axis=0, prepend=0.0)).sum())
+    years = max(weights.shape[0] / periods_per_year, 1e-9)
+    invested = np.abs(weights).sum(axis=1)
     metrics = compute_metrics(
         strategy_returns,
         basis="net",
         turnover_annual=turnover / years,
-        time_in_market=float(np.mean(weights != 0.0)) if weights.size else 0.0,
+        time_in_market=float(np.mean(invested > 0.0)) if invested.size else 0.0,
         periods_per_year=periods_per_year,
     )
     benchmark_metrics = compute_metrics(
@@ -221,6 +310,7 @@ def benchmark_check(
 
     return BenchmarkEvidence(
         strategy_returns=strategy_returns,
+        strategy_gross_returns=strategy_gross,
         benchmark_returns=benchmark_returns,
         benchmark_returns_risk_matched=matched,
         metrics=metrics,
@@ -229,6 +319,9 @@ def benchmark_check(
         risk_match_scale=scale,
         benchmark_entry_cost=bench_entry.total,
         strategy_total_cost=total_cost,
+        cost_breakdown=breakdown,
+        max_adv_participation=worst_participation,
+        n_symbols=len(universe),
         rates_are_verified=costs.config.rates_are_verified,
         limitations_text=limitations,
         gate=gate,
@@ -247,8 +340,10 @@ def _limitations(costs: IndiaEquityCostModel) -> str:
         )
     lines.append(
         "The benchmark series is supplied by the caller. NULL does not select it. "
-        "If it is a price index rather than a total-return index, roughly 1.2-1.5%/yr "
-        "of dividends are missing and the alpha below is overstated by that much."
+        "If it is a price index rather than a total-return index, roughly 1.35%/yr "
+        "of dividends are missing and the alpha below is overstated by that much: "
+        "NSE reports 11.09% annualised for the NIFTY 50 price index against 12.44% "
+        "for total return over the 20 years to February 2026."
     )
     lines.append(
         "Risk-free rate assumed to be zero; NULL has no risk-free series. Beta is "
@@ -265,7 +360,6 @@ def _build_gate(
 ) -> GateResult:
     """The rationale is the product. Name the number, the threshold, and why."""
     passed = alpha.alpha_tstat >= ALPHA_TSTAT_THRESHOLD
-
     se_note = (
         f"Newey-West standard errors, {alpha.hac_lags} lags"
         if alpha.se_method == "newey_west"
