@@ -161,6 +161,27 @@ def _golden_suite_incomplete(
     )
 
 
+@register
+def _synthesised_evidence(
+    evidence: Evidence, context: dict[str, object]
+) -> Limitation | None:
+    fields = context.get("synthesised_evidence_fields", ())
+    if not isinstance(fields, (list, tuple)) or not fields:
+        return None
+    listed = "; ".join(str(f) for f in fields)
+    return Limitation(
+        key="synthesised_evidence",
+        severity="blocking",
+        text=(
+            f"{len(fields)} field(s) of the Evidence behind this verdict were SUPPLIED "
+            f"rather than computed by the pipeline: {listed}. The gates ran on those "
+            "values honestly, but a gate is only as good as its input, and these inputs "
+            "did not come from measuring the strategy. A green result here is not "
+            "end-to-end evidence."
+        ),
+    )
+
+
 def collect_limitations(
     evidence: Evidence, context: dict[str, object]
 ) -> tuple[Limitation, ...]:

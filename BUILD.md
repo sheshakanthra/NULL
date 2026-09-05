@@ -353,7 +353,7 @@ gates:
   walkforward_consistency: {min_fold_win_rate: 0.60}
   sensitivity_plateau:  {min_neighborhood_ratio: 0.60}
   capacity:             {max_adv_participation: 0.05}
-  drawdown_tolerance:   {max_dd: 0.35}
+  # drawdown_tolerance and pbo are NOT gates — see configs/gates_default.yaml
 ```
 
 Every `GateResult.rationale` is written for a human, not a log file:
@@ -386,6 +386,20 @@ known correct verdict. CI fails if any verdict flips.
 That last row matters as much as the other seven. **A harness that rejects everything is
 exactly as useless as one that accepts everything.** If `true_edge_synthetic` cannot pass,
 your thresholds are miscalibrated and you will throw away real edges.
+
+### What "all eight green" does NOT mean
+
+The golden suite runs the real gates against real statistics, but four fields of the
+`Evidence` it judges are **supplied by the test harness rather than computed by the
+pipeline**: walk-forward fold returns, the sensitivity surface, `max_adv_participation`,
+and the leakage flags. `tests/golden/harness.SYNTHESISED` names them, and the limitations
+band on every report lists them.
+
+So a green suite proves the *gates* behave correctly on known inputs. It does not prove
+the pipeline produces those inputs correctly from a strategy and its bars. Wiring
+`partition/walkforward.py`, `sensitivity/neighborhood.py`, ADV participation and
+`leakage/audit.py` into the evidence build is outstanding, and until that lands "all eight
+green" is a statement about the judge, not about the whole machine.
 
 ### Open decision — the benchmark series (must be settled before M6 is called green)
 

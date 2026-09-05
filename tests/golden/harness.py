@@ -175,6 +175,7 @@ def build_report(fixture: SyntheticStrategy, *, seed: int = 11) -> VerdictReport
             "risk_free_supplied": False,
             "golden_suite_green": False,
             "leakage_checks_unchecked": tuple(range(5)),
+            "synthesised_evidence_fields": SYNTHESISED,
             "pbo_rationale": pbo.rationale,
             "expected_max_sharpe_sentence": dsr.selection_diagnostic,
             "mtrl_rationale": mtrl.rationale,

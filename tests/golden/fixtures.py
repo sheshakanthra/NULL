@@ -24,6 +24,7 @@ TRADING_DAYS = 252
 # "persistent edge" claim would realistically be backed by -- not because it makes
 # a threshold work out.
 TEN_YEARS = 10 * TRADING_DAYS
+FIFTEEN_YEARS = 15 * TRADING_DAYS
 
 
 @dataclass(frozen=True)
@@ -161,37 +162,55 @@ def pure_noise(seed: int = 20260906, n_obs: int = TEN_YEARS) -> SyntheticStrateg
 
 
 def true_edge_synthetic(
-    seed: int = 20260907, n_obs: int = TEN_YEARS, target_sharpe: float = 0.6
+    seed: int = 20260907, n_obs: int = FIFTEEN_YEARS, target_ir: float = 0.6
 ) -> SyntheticStrategy:
-    """A persistent, genuine edge. Low turnover. One trial, declared honestly.
+    """A persistent, genuine edge: information ratio 0.6 over a realistic benchmark.
 
-    THE CALIBRATION FIXTURE. If this cannot pass, the thresholds are wrong and
-    real edges will be discarded. Do not tune it into passing -- if it fails,
-    that is a finding about the gates, not about the fixture.
+    THE CALIBRATION FIXTURE. If this cannot pass, the thresholds are wrong and real
+    edges will be discarded. Do not tune it into passing -- if it fails, that is a
+    finding about the gates, not about the fixture.
 
-    The edge is a small constant drift added to an otherwise noiseless-mean
-    series, which is the cleanest possible form of "persistent": it does not
-    concentrate in one regime, and it does not depend on turnover.
+    Specified as an INFORMATION RATIO, not an absolute Sharpe, and that respecification
+    fixed a real defect. The original version injected a 0.6 absolute Sharpe and was
+    then judged against whatever benchmark the harness happened to generate -- which
+    realised a 0.71 Sharpe, so the "true edge" had, correctly, no edge over it. Every
+    gate that matters measures EXCESS over benchmark; specifying the fixture in
+    absolute terms meant its name did not describe what it contained.
+
+    Construction: a benchmark at a realistic long-run level (12% arithmetic drift,
+    16% annualised vol), plus an active return with 4% tracking error whose IR is
+    imposed exactly rather than sampled. The strategy is benchmark + active, so beta
+    is 1 by construction and alpha is the active return.
+
+    Fifteen years, not ten. At IR 0.6 the alpha t-stat is approximately
+    IR * sqrt(years), giving 2.32 at 15 years against a threshold of 2.0 -- margin
+    rather than a hairline. Ten years gives 1.90 and cannot clear the bar. The window
+    was arbitrary; the significance threshold is not, and lowering a standard
+    threshold to make a fixture pass is the exact failure NULL exists to catch.
     """
     rng = np.random.default_rng(seed)
-    vol = 0.011
-    # Standardise the draw, then impose the target exactly. Sampling from a
-    # 0.6-Sharpe process is not the same as HAVING a 0.6 Sharpe: on this seed a
-    # naive draw realised 0.2011 over ten years, about -1.25 standard errors, and
-    # the fixture would then have been testing whether the gates reject a 0.2
-    # Sharpe -- which they should. The fixture's contract is "a strategy with a
-    # 0.6 Sharpe", so it is constructed to have one.
-    raw = rng.normal(0.0, 1.0, n_obs)
-    raw = (raw - raw.mean()) / raw.std(ddof=1)
-    daily_edge = target_sharpe * vol / np.sqrt(TRADING_DAYS)
-    returns = raw * vol + daily_edge
+
+    bench_vol_daily = 0.16 / np.sqrt(TRADING_DAYS)
+    bench_mean_daily = 0.12 / TRADING_DAYS
+    raw_b = rng.normal(0.0, 1.0, n_obs)
+    raw_b = (raw_b - raw_b.mean()) / raw_b.std(ddof=1)
+    benchmark = raw_b * bench_vol_daily + bench_mean_daily
+
+    tracking_error_daily = 0.04 / np.sqrt(TRADING_DAYS)
+    raw_a = rng.normal(0.0, 1.0, n_obs)
+    raw_a = (raw_a - raw_a.mean()) / raw_a.std(ddof=1)
+    active = raw_a * tracking_error_daily + (
+        target_ir * tracking_error_daily / np.sqrt(TRADING_DAYS)
+    )
+
     return SyntheticStrategy(
         name="true_edge_synthetic",
-        returns=returns,
+        returns=benchmark + active,
         n_trials=1,
         trial_returns=None,
         expected_verdict="PASS",
         caught_by=None,
+        benchmark=benchmark,
     )
 
 
