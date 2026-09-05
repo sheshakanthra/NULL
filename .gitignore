@@ -1,7 +1,16 @@
 # Cached parquet and any fetched data. Never committed -- data fetch is a
 # separate, cached, offline-first stage and `null audit` must run offline.
+# Fetched/derived data is not committed...
 data/*
 !data/.gitkeep
+
+# ...except the reference caches, which ARE committed on purpose. TRI and OHLCV
+# are fetched once from endpoints that can change or block without notice, and
+# committing them is what keeps the M7 demo reproducible after that happens.
+# Chunks and logs stay out; only the merged parquet and its provenance sidecar go in.
+!data/reference/
+data/reference/chunks/
+data/reference/*.log
 
 __pycache__/
 *.py[cod]

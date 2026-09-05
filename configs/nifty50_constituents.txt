@@ -1,0 +1,59 @@
+# NIFTY 50 constituents used to scope the OHLCV fetch.
+#
+# NOT POINT-IN-TIME. This is a single recent snapshot applied across the whole
+# history, which is survivorship bias: names that left the index are absent, and
+# names that joined recently are present for years before they were constituents.
+# The `survivorship` limitation in null/verdict/limitations.py fires on every report
+# built from this and says so.
+#
+# Replacing this with real point-in-time membership is the open M3 data decision.
+ADANIENT
+ADANIPORTS
+APOLLOHOSP
+ASIANPAINT
+AXISBANK
+BAJAJ-AUTO
+BAJAJFINSV
+BAJFINANCE
+BEL
+BHARTIARTL
+BPCL
+BRITANNIA
+CIPLA
+COALINDIA
+DRREDDY
+EICHERMOT
+GRASIM
+HCLTECH
+HDFCBANK
+HDFCLIFE
+HEROMOTOCO
+HINDALCO
+HINDUNILVR
+ICICIBANK
+INDUSINDBK
+INFY
+ITC
+JSWSTEEL
+KOTAKBANK
+LT
+M&M
+MARUTI
+NESTLEIND
+NTPC
+ONGC
+POWERGRID
+RELIANCE
+SBILIFE
+SBIN
+SHRIRAMFIN
+SUNPHARMA
+TATACONSUM
+TATAMOTORS
+TATASTEEL
+TCS
+TECHM
+TITAN
+TRENT
+ULTRACEMCO
+WIPRO
