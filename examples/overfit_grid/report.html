@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NULL verdict &mdash; overfit_grid</title>
+<style>
+:root{--bg:#f7f7f5;--card:#fff;--ink:#16181d;--muted:#5b6270;--line:#e3e5ea;
+--pass:#1a7f4b;--passbg:#e8f5ee;--fail:#b3261e;--failbg:#fdeceb;
+--nc:#8a6d1f;--ncbg:#fbf3dd;--band:#3a2f14;--bandink:#f6efdd}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:820px;margin:0 auto;padding:40px 24px 0}
+h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+margin:38px 0 12px;font-weight:600}
+.sub{color:var(--muted);font-size:13px;margin:0}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.badge{display:inline-block;padding:6px 14px;border-radius:4px;font-weight:700;
+letter-spacing:.06em;font-size:13px}
+.badge.reject{background:var(--failbg);color:var(--fail)}
+.badge.pass{background:var(--passbg);color:var(--pass)}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;
+padding-bottom:22px;border-bottom:1px solid var(--line)}
+.cards{display:flex;gap:12px;margin-top:22px}
+.card{flex:1;background:var(--card);border:1px solid var(--line);border-radius:6px;
+padding:14px 16px}
+.card .k{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+.card .v{font-size:26px;font-weight:650;margin-top:4px;letter-spacing:-.02em}
+.gate{display:flex;align-items:baseline;gap:10px;background:var(--card);
+border:1px solid var(--line);border-radius:6px;padding:11px 14px;margin-bottom:7px}
+.gate .icon{width:18px;font-weight:700}
+.gate .name{flex:1;font-weight:600}
+.gate .cmp{color:var(--muted);font-size:13px;white-space:nowrap}
+.gate.pass .icon{color:var(--pass)} .gate.fail .icon{color:var(--fail)}
+.gate.nc{border-color:#e6d9a8;background:var(--ncbg)}
+.gate.nc .icon{color:var(--nc)} .gate.nc .name{color:var(--nc)}
+.tag{font-size:10px;letter-spacing:.06em;font-weight:700;color:var(--nc);
+border:1px solid #e0cf94;border-radius:3px;padding:1px 5px;margin-left:8px}
+.why p{background:var(--card);border-left:3px solid var(--line);border-radius:0 4px 4px 0;
+margin:0 0 10px;padding:13px 16px}
+.why p.fail{border-left-color:var(--fail)}
+.why p.nc{border-left-color:var(--nc);background:var(--ncbg)}
+.why p .g{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.07em;
+color:var(--muted);margin-bottom:5px;font-weight:700}
+.panel{background:var(--card);border:1px dashed var(--line);border-radius:6px;
+padding:13px 16px;margin-bottom:8px;color:#33383f;font-size:14px}
+.panel .g{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.07em;
+color:var(--muted);margin-bottom:5px;font-weight:700}
+.note{color:var(--muted);font-size:13px;margin:-4px 0 12px}
+.band{background:var(--band);color:var(--bandink);margin-top:46px;padding:30px 24px 40px}
+.band .inner{max-width:820px;margin:0 auto}
+.band h2{color:#e5d9b4;margin-top:0}
+.band ul{margin:0;padding-left:18px}
+.band li{margin-bottom:10px}
+.band .sev{font-size:10px;letter-spacing:.07em;font-weight:700;border:1px solid #7d6c3d;
+border-radius:3px;padding:1px 5px;margin-right:7px;text-transform:uppercase}
+</style></head><body>
+<div class="wrap">
+  <div class="head">
+    <div>
+      <h1>overfit_grid</h1>
+      <p class="sub mono">5,000 trials &middot; 504
+      observations &middot; evidence 8ac1e85b9efb &middot;
+      spec 0.3.0</p>
+    </div>
+    <div class="badge reject">REJECT</div>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="k">Observed Sharpe</div>
+      <div class="v mono">0.82</div></div>
+    <div class="card"><div class="k">Deflated Sharpe</div>
+      <div class="v mono">0.37</div></div>
+    <div class="card"><div class="k">Alpha t-stat</div>
+      <div class="v mono">0.31</div></div>
+  </div>
+
+  <h2>Gates</h2>
+<div class="gate pass"><span class="icon">✓</span><span class="name">leakage_clean</span><span class="cmp mono">0 vs no fatal leakage flags</span></div>
+<div class="gate fail"><span class="icon">✗</span><span class="name">beats_benchmark_net</span><span class="cmp mono">0.31 vs 2</span></div>
+<div class="gate fail"><span class="icon">✗</span><span class="name">deflated_sharpe</span><span class="cmp mono">0.3688 vs 0.95</span></div>
+<div class="gate fail"><span class="icon">✗</span><span class="name">reality_check</span><span class="cmp mono">0.095 vs 0.05</span></div>
+<div class="gate pass"><span class="icon">✓</span><span class="name">walkforward_consistency</span><span class="cmp mono">0.6 vs 0.6</span></div>
+<div class="gate fail"><span class="icon">✗</span><span class="name">sensitivity_plateau</span><span class="cmp mono">0.23 vs 0.6</span></div>
+<div class="gate nc"><span class="icon">–</span><span class="name">capacity<span class="tag">NOT COMPUTABLE</span></span><span class="cmp mono">no evidence</span></div>
+<div class="gate pass"><span class="icon">✓</span><span class="name">drawdown_tolerance</span><span class="cmp mono">0.1168 vs 0.35</span></div>
+
+  <h2>Why it failed</h2>
+<p class="fail"><span class="g">beats_benchmark_net</span>No alpha over buy-and-hold after costs. Strategy returned 12.89% CAGR net of everything against -20.42% for the benchmark, beta 0.12. Annualised alpha 0.40% with a t-stat of 0.31 (Newey-West, 6 lags) over 504 observations; threshold is 2.0, and alpha with a t-stat below 2 is not alpha.</p>
+<p class="fail"><span class="g">deflated_sharpe</span>The probability the true Sharpe exceeds zero, after adjusting for how many variants were tried and for the shape of the return distribution, is 0.37 against a threshold of 0.95. Adjusted for selection, this is a search finding noise.</p>
+<p class="fail"><span class="g">reality_check</span>Bootstrapping the null that the best candidate does not beat the benchmark, using a stationary bootstrap so autocorrelation survives resampling, gives p = 0.095 against a threshold of 0.050. The outperformance is within what chance produces on this history.</p>
+<p class="fail"><span class="g">sensitivity_plateau</span>The mean Sharpe of the immediate parameter neighbourhood is 23% of the peak (0.19 against 0.82), threshold 60%. A spike is curve-fitting: the result depends on the exact parameters chosen, and neighbouring values do not work.</p>
+<p class="nc"><span class="g">capacity</span>Not computable: Evidence carries no per-order ADV participation, so the share of daily traded volume this strategy would consume cannot be checked. Order-level participation data is required. This gate did not judge the strategy either way. It does not count as a pass -- a strategy cannot clear a test that was never run -- but it is reported separately from a genuine failure so the difference stays visible.</p>
+<p><span class="g">selection diagnostic</span>With 5,000 trials over 504 observations, noise alone is expected to produce a maximum Sharpe of 1.06; the candidate showed 0.82, so the search cannot distinguish this edge from luck.</p>
+
+  <h2>Evidence panels</h2>
+  <p class="note">These are reported for context and <strong>do not vote</strong>
+  on the verdict.</p>
+<div class="panel"><span class="g">mtrl</span>An annualised Sharpe of 0.82, with skew -0.11 and kurtosis 3.37, would need 4.0 years of observations before it could be called significant at 95% confidence. The backtest is 2.0 years long, so it is under-powered by construction: this Sharpe would need a longer track record than exists before it could be called significant, and no analysis of the existing data changes that.</div>
+<div class="panel"><span class="g">pbo</span>Across 12,870 symmetric train/test partitions of 1,000 variants, the in-sample best landed below the out-of-sample median 77% of the time (median relative rank 0.26). Under no selection skill every candidate is exchangeable and PBO&#x27;s expected value is exactly 0.5, so the point estimate alone proves nothing; a moving-block subsampling interval over 15 moving-block subsamples of the underlying series gives [0.76, 1.00] at 95% confidence, and the interval reaches 1.00, at or above the 0.5 null. This is reported as evidence only and does not vote on the verdict. Each replicate used a random 512 of the 12,870 partitions to keep the cost tractable; the point estimate uses all of them. A low PBO is never evidence that an edge is real. With many candidates over a short sample, the maximum of N noise Sharpes routinely exceeds a genuine edge&#x27;s own Sharpe, so the real strategy is not the one selected and PBO ends up describing a search that never found it.</div>
+</div>
+
+<div class="band"><div class="inner">
+  <h2>Stated limitations &mdash; all of them</h2>
+  <ul>
+<li><span class="sev">blocking</span>Charge rates have NOT been reconciled against a live broker charge list (configs/costs_india_equity.yaml carries _verified_on: UNVERIFIED). Every cost figure on this report is indicative only, and rates wrong in the optimistic direction inflate every result shown here.</li>
+<li><span class="sev">blocking</span>The benchmark series is supplied by the caller and NULL does not select it. It has not been confirmed as a total-return index. If it is a price index, roughly 1.2-1.5%/yr of dividends are missing from the benchmark and every alpha figure here is overstated by that much.</li>
+<li><span class="sev">blocking</span>The universe is NOT point-in-time. No index-membership source is wired up, so symbols that were not constituents on a given date cannot be detected and delisted names may be silently absent. A survivorship-biased universe inflates returns.</li>
+<li><span class="sev">blocking</span>5 of the leakage checks in BUILD.md section 5 could not run and were not evaluated: point-in-time constituency, universe rebalance timing, delisting terminal values, corporate-action confirmation, and NaN forward-fill detection. A clean leakage result is only as strong as this list is short.</li>
+<li><span class="sev">stated</span>Risk-free rate assumed to be zero; NULL has no risk-free series. Beta is unaffected; alpha is shifted by (1 - beta) times the true rate.</li>
+<li><span class="sev">blocking</span>1 gate(s) could not be evaluated at all and did not judge this strategy either way: capacity. They are counted as failures, not passes, but the strategy has not actually been tested against them.</li>
+<li><span class="sev">blocking</span>The golden fixture suite is not complete. Until all eight fixtures in BUILD.md section 8 return their expected verdicts, a REJECT from NULL may be describing the harness rather than the strategy, and the two cannot be told apart from this report.</li>
+  </ul>
+</div></div>
+</body></html>
