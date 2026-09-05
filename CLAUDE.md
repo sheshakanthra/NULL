@@ -57,6 +57,23 @@ BUILD.md §2 does not answer any of them, so they are recorded here instead.
    net-basis benchmark reports its own cost drag as alpha. The headline comparison must
    be net-vs-net; gross stays available on `Evidence.gross_returns` for panels.
 
+6. **`GateResult.state` is three-valued: PASS / FAIL / NOT_COMPUTABLE.** Amended at M5
+   (spec 0.3.0) on request. NOT_COMPUTABLE means the gate could not run, as distinct from
+   running and failing — "we could not check" is not "we checked and it failed". Neither
+   passes: a validator makes `passed` and `state` unconstructible in disagreement.
+7. **`Evidence.max_adv_participation: NullFloat | None`.** Amended at M5 (spec 0.3.0),
+   same reopening. `None` means not computable and the capacity gate then fails closed.
+
+**On the pinned golden hash.** Both amendments left `417134032b77…` unchanged, and that
+is *expected*, not evidence the changes were inert: the pinned fixture hashes a
+`StrategyRun`, which contains neither `GateResult` nor `Evidence`. Do not cite a matching
+golden hash as proof that a contract change had no effect — it only proves the change did
+not touch `StrategyRun`.
+
+**contracts.py is closed again.** The freeze was reopened once, deliberately, for exactly
+these two amendments so a third break would not be needed later. Anything further gets the
+same stop-and-ask as before.
+
 ## Working rules
 
 - **One milestone per session.** Do not start M2 because M1 finished early. Stop and report.

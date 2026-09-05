@@ -580,6 +580,15 @@ class Evidence(NullModel):
     pbo: Probability
     reality_check_p: Probability
     mtrl_years: NonNegativeFloat
+    max_adv_participation: NullFloat | None = None
+    """Largest share of 20d average daily traded value any single order consumes.
+
+    ``None`` means not computable, and the capacity gate then fails with the usual
+    not-computable rationale rather than passing. Computable during evidence build
+    from the weight changes and ``Bar.adv_20``, which the contract already carries.
+
+    Added at spec 0.3.0 alongside the GateResult state, as the second and final
+    amendment of that reopening. contracts.py is closed again after this."""
     walkforward: tuple[FoldResult, ...]
     regimes: dict[str, PerfMetrics]
     sensitivity: SensitivityResult

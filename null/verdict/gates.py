@@ -204,13 +204,29 @@ def sensitivity_plateau(evidence: Evidence, config: dict[str, Any]) -> GateResul
 
 
 def capacity(evidence: Evidence, config: dict[str, Any]) -> GateResult:
-    # Evidence carries no ADV-participation field. Rather than skip the gate or
-    # invent a number, it reports NOT_COMPUTABLE and fails closed.
-    return not_computable(
+    threshold = float(config["max_adv_participation"])
+    observed = evidence.max_adv_participation
+    if observed is None:
+        return not_computable(
+            "capacity",
+            "max_adv_participation was not supplied, so the share of daily traded "
+            "volume this strategy would consume cannot be checked. It is computable "
+            "from weight changes and Bar.adv_20 during evidence build.",
+        )
+    passed = observed <= threshold
+    return _decide(
         "capacity",
-        "Evidence carries no per-order ADV participation, so the share of daily "
-        "traded volume this strategy would consume cannot be checked. Order-level "
-        "participation data is required.",
+        passed,
+        observed,
+        threshold,
+        f"The largest single order would consume {observed:.1%} of 20-day average "
+        f"daily traded value, against a tolerance of {threshold:.1%}. "
+        + (
+            "The strategy fits in the liquidity available to it."
+            if passed
+            else "An order this size does not execute at the prices the backtest "
+            "assumed; the returns shown are not attainable at this capital."
+        ),
     )
 
 
