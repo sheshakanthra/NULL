@@ -294,6 +294,7 @@ def _build_gate(
 
     return GateResult(
         name=GATE_NAME,
+        state="PASS" if passed else "FAIL",
         passed=passed,
         observed=alpha.alpha_tstat,
         threshold=ALPHA_TSTAT_THRESHOLD,
