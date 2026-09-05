@@ -4,18 +4,27 @@ Combinatorially Symmetric Cross-Validation. Split the return matrix into ``S``
 submatrices, form all ``C(S, S/2)`` train/test partitions, and measure how often
 the configuration that looked best in-sample lands below median out-of-sample.
 
-**The gate is an interval, not a point estimate.** Under the null of no selection
-skill every candidate is exchangeable, so the in-sample winner's out-of-sample
-rank is uniform and PBO's expected value is exactly 0.50. BUILD.md's original
-`PBO < 0.5` therefore sat precisely on the null's mean and had no power: on a
-noise grid it rejected about half the time, decided by the seed. Measured across
-seven seeds, ``overfit_grid`` rejected on five and passed on two. No threshold
-tweak fixes that honestly -- moving the gate to 0.3 would just be choosing a
-number that makes the current fixtures behave.
+**PBO IS NOT A GATE. It is an evidence panel: reported always, decisive never.**
 
-So: PBO = 0.50 is the null, and rejecting it requires evidence. The gate passes
-only when the **upper** bound of the bootstrap interval falls below 0.50. A point
-estimate of 0.42 is not evidence against 0.50; an interval of [0.05, 0.28] is.
+It was demoted after two attempts to make it vote failed. Under the null of no
+selection skill every candidate is exchangeable, so the in-sample winner's
+out-of-sample rank is uniform and PBO's expected value is exactly 0.50 --
+precisely where BUILD.md §6.2 put the threshold, which left the gate with no
+power. Replacing the point estimate with an interval (reject unless the upper
+bound clears 0.50) was principled and still passed pure noise on 2 seeds in 6.
+
+The reason is not calibration. The interval measures variability across time
+windows of one path, while the variability that matters is across candidate-set
+realisations, and that distribution is not present in a single dataset. No further
+machinery recovers it.
+
+Keeping it as a gate would be actively harmful: "PBO 0.275, upper 0.325, PASS"
+reads as "survived a rigorous overfitting test" while carrying almost no evidence.
+That is a persuasive artifact of exactly the kind NULL exists to destroy.
+
+The numbers are still computed and still reported, because they are informative
+in the aggregate and because the caveat below is worth printing. They just do not
+vote. See docs/pbo_calibration.md for the full decision record.
 
 The interval comes from resampling the underlying time series and recomputing
 CSCV per replicate. It is emphatically *not* a bootstrap over the 12,870
@@ -81,12 +90,14 @@ _COMBO_BATCH = 512
 
 
 class PBOResult(NullModel):
+    """An evidence panel. Note the deliberate absence of a ``passed`` field --
+    this result does not vote on a verdict and cannot be made to."""
+
     state: PBOState
-    passed: bool
     pbo: Probability
     """Point estimate. Meaningful only when ``state`` is 'computed'."""
     pbo_upper: Probability
-    """Upper bound of the bootstrap interval. This is what the gate reads."""
+    """Upper bound of the subsampling interval. Reported, not gated on."""
     pbo_lower: Probability
     confidence: Probability
     n_strategies: int
@@ -174,13 +185,12 @@ def compute_pbo(
     if n_trials == 1:
         return PBOResult(
             state="not_applicable",
-            passed=True,
             pbo=0.0,
             pbo_lower=0.0,
             pbo_upper=0.0,
             n_strategies=1,
             rationale=(
-                "Not applicable: one trial was declared, so no selection was "
+                "Panel, not a gate. Not applicable: one trial was declared, so no selection was "
                 "performed and there is nothing for PBO to measure. This gate judges "
                 "the process that picked a configuration; a strategy that ran a single "
                 f"variant did not pick. {LOW_PBO_CAVEAT}"
@@ -203,13 +213,12 @@ def compute_pbo(
         n_cols = 0 if trial_returns is None else int(np.asarray(trial_returns).shape[-1])
         return PBOResult(
             state="not_computable",
-            passed=False,
             pbo=1.0,
             pbo_lower=0.0,
             pbo_upper=1.0,
             n_strategies=n_cols,
             rationale=(
-                f"Not computable: {n_trials:,} trials were declared but per-trial "
+                f"Panel, not a gate. Not computable: {n_trials:,} trials were declared but per-trial "
                 f"return series were not supplied ({n_cols} usable columns). CSCV needs "
                 "the return matrix, not the count. Missing evidence fails the gate "
                 "rather than passing it -- a search that will not show its candidates "
@@ -258,7 +267,6 @@ def compute_pbo(
     centred = replicates - point
     lower = float(np.clip(point - scale * np.quantile(centred, 1.0 - alpha / 2.0), 0.0, 1.0))
     upper = float(np.clip(point - scale * np.quantile(centred, alpha / 2.0), 0.0, 1.0))
-    passed = upper < PBO_NULL
 
     subsample_note = (
         f" Each replicate used a random {partition_subsample:,} of the "
@@ -268,19 +276,14 @@ def compute_pbo(
         else ""
     )
 
-    verdict = (
-        f"the interval lies entirely below {PBO_NULL}, which is evidence the "
-        "selection process did better than chance"
-        if passed
-        else (
-            f"the interval reaches {upper:.2f}, at or above the null of {PBO_NULL}, so "
-            "there is no evidence the selection process beat chance"
-        )
+    reading = (
+        f"the interval lies entirely below the {PBO_NULL} null"
+        if upper < PBO_NULL
+        else f"the interval reaches {upper:.2f}, at or above the {PBO_NULL} null"
     )
 
     return PBOResult(
         state="computed",
-        passed=passed,
         pbo=point,
         pbo_lower=lower,
         pbo_upper=upper,
@@ -301,6 +304,7 @@ def compute_pbo(
             f"over {n_subsamples} moving-block subsamples of the underlying series "
             f"gives "
             f"[{lower:.2f}, {upper:.2f}] at {confidence:.0%} confidence, and "
-            f"{verdict}.{subsample_note} {LOW_PBO_CAVEAT}"
+            f"{reading}. This is reported as evidence only and does not vote on the "
+            f"verdict.{subsample_note} {LOW_PBO_CAVEAT}"
         ),
     )

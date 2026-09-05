@@ -1,6 +1,75 @@
+# DECISION: PBO is demoted from a gate to an evidence panel
+
+**Decided by Sheshakanth. Settled — do not reopen without new evidence.**
+
+PBO no longer votes on a verdict. It is computed and printed on every report, with
+its interval and the standing caveat, and it is decisive never. `pbo` is
+deliberately absent from `configs/gates_default.yaml`; that file carries the same
+reasoning inline so nobody restores it from BUILD.md §7 without reading this.
+
+## What was tried, and why each failed
+
+**1. The spec threshold, `PBO < 0.5`.** No power. Under the null of no selection
+skill every candidate is exchangeable, the in-sample winner's out-of-sample rank
+is uniform, and PBO's expected value is exactly 0.50 — the threshold sits on the
+null's mean. Measured: `overfit_grid` rejected on 5 of 7 seeds and passed on 2.
+
+**2. Moving the threshold** (to 0.35, say). Rejected without implementing. Below
+the null's mean a noise grid fails more often, but the number would have been
+chosen to make the current fixtures behave, which is fitting the gate to the test.
+
+**3. An interval, rejecting unless the upper bound clears 0.50.** Principled — a
+point estimate of 0.42 is not evidence against a null of 0.5, an interval of
+[0.05, 0.28] is. Two constructions:
+
+  - *With-replacement bootstrap over rows*: wrong. It places the same observation
+    in both halves of a replicate, which is leakage inside the resample. Intervals
+    did not contain their own point estimate (0.506, [0.021, 0.417]) and pure noise
+    passed on 6 seeds of 6.
+  - *Moving-block subsampling*: correct construction, better result, still passed
+    pure noise on 2 seeds of 6. Widening did not help — unscaled intervals gave
+    identical verdicts.
+
+## Why demotion is the answer rather than more machinery
+
+The residual is not calibration error. The subsample interval measures variability
+across **time windows of one path**. The variability that decides whether a search
+was skilful is across **candidate-set realisations**, and that distribution is not
+present in a single dataset. On seeds 42 and 99 the point estimate is genuinely
+low (0.275, 0.390) — the statistic's honest information content on that path, not
+noise in its estimation. No amount of further resampling recovers a distribution
+the data does not contain.
+
+Keeping it as a gate is worse than removing it. A false PASS on the PBO row is a
+persuasive artifact: "PBO 0.275, upper 0.325, PASS" reads as "survived a rigorous
+overfitting test" while carrying almost no evidence. That is the same class of
+harm as a nested PASS inside a REJECT — a true-looking number that invites belief
+it has not earned.
+
+## What catches overfit_grid instead
+
+Deflated Sharpe, on 7 of 7 seeds, plus the expected-max-Sharpe diagnostic that
+does in one sentence what the PBO gate was supposed to do:
+
+> With 5,000 trials over 504 observations, noise alone is expected to produce a
+> maximum Sharpe of 1.06; the candidate showed 0.82, so the search cannot
+> distinguish this edge from luck.
+
+## What PBO is still good for
+
+Reported in aggregate it is informative, and the caveat it carries is worth
+printing on every report: **a low PBO is never evidence that an edge is real.**
+With many candidates over a short sample the maximum of N noise Sharpes routinely
+exceeds a genuine edge's own Sharpe, so the real strategy is not the one selected
+and PBO ends up describing a search that never found it.
+
+---
+
+*The investigation that led here follows, kept for the evidence.*
+
 # P0 — the PBO gate cannot reliably reject a noise grid at a 0.50 threshold
 
-Status: **partially addressed, still open. Blocking M6.** Found while building M4. Feature work on the
+Status: **CLOSED by demotion — see the decision record above.** Found while building M4. Feature work on the
 statistical adversary is stopped per CLAUDE.md ("If a golden fixture's verdict
 flips, that is a P0. Stop feature work.").
 

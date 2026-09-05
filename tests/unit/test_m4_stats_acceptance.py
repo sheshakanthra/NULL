@@ -2,7 +2,8 @@
 
 Three fixtures, three known verdicts:
 
-  overfit_grid          REJECT, independently on deflated_sharpe AND on pbo
+  overfit_grid          REJECT on deflated_sharpe (PBO was demoted to a panel --
+                        see docs/pbo_calibration.md)
   pure_noise            REJECT
   true_edge_synthetic   PASS
 
@@ -63,16 +64,22 @@ def test_overfit_grid_fails_deflated_sharpe(overfit) -> None:
     )
 
 
-@pytest.mark.skip(
-    reason="P0, docs/pbo_calibration.md: overfit_grid's PBO verdict is seed-dependent "
-    "(rejects on 5 of 7 seeds). PBO's expected value under the null IS 0.50, which is "
-    "exactly where BUILD.md puts the gate, so on noise it is a coin flip. Un-skip when "
-    "the threshold decision is made."
-)
-def test_overfit_grid_fails_pbo(overfit) -> None:
-    """Independently of DSR: the selection process itself must be shown to fail."""
-    result = compute_pbo(overfit.trial_returns)
-    assert result.pbo >= PBO_THRESHOLD
+def test_overfit_grid_pbo_is_reported_as_a_panel_not_a_gate(overfit) -> None:
+    """PBO was demoted (docs/pbo_calibration.md). Assert the panel, not a verdict.
+
+    The number is still produced and still printed. It simply does not vote, and
+    the result object has no ``passed`` field to be misread as one.
+    """
+    from null.stats.pbo import LOW_PBO_CAVEAT, PBOResult
+
+    result = compute_pbo(overfit.trial_returns, n_trials=overfit.n_trials)
+    assert result.state == "computed"
+    assert 0.0 <= result.pbo_lower <= result.pbo_upper <= 1.0
+    assert LOW_PBO_CAVEAT in result.rationale
+    assert "does not vote" in result.rationale
+    assert "passed" not in PBOResult.model_fields, (
+        "PBOResult grew a passed field; PBO is an evidence panel and must not vote"
+    )
 
 
 def test_deflated_sharpe_rejects_overfit_grid_on_every_seed_tested() -> None:
@@ -132,10 +139,10 @@ def test_true_edge_passes_deflated_sharpe(edge) -> None:
     )
 
 
-def test_true_edge_passes_pbo(edge) -> None:
+def test_true_edge_pbo_panel_reports_not_applicable(edge) -> None:
     """One trial means no selection, so there is nothing to have overfit."""
-    result = compute_pbo(edge.trial_returns)
-    assert result.pbo < PBO_THRESHOLD
+    result = compute_pbo(edge.trial_returns, n_trials=edge.n_trials)
+    assert result.state == "not_applicable"
 
 
 # ---------------------------------------------------------------------------

@@ -54,21 +54,17 @@ def test_pbo_verdict_on_noise_is_not_stable_across_seeds() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_state_1_one_trial_is_not_applicable_and_passes() -> None:
+def test_state_1_one_trial_is_not_applicable() -> None:
     """No selection was performed, so there is nothing for PBO to measure."""
-    r = compute_pbo(None, n_trials=1)
-    r2 = compute_pbo(_independent_noise(), n_trials=1)
-    for result in (r, r2):
+    for result in (compute_pbo(None, n_trials=1), compute_pbo(_independent_noise(), n_trials=1)):
         assert result.state == "not_applicable"
-        assert result.passed is True
         assert "no selection was performed" in result.rationale.lower()
 
 
-def test_state_2_missing_trial_matrix_is_not_computable_and_fails() -> None:
-    """Missing evidence fails the gate. Same pattern as every other gate."""
+def test_state_2_missing_trial_matrix_is_not_computable() -> None:
+    """Declared a search but would not show the candidates."""
     result = compute_pbo(None, n_trials=500)
     assert result.state == "not_computable"
-    assert result.passed is False
     assert "not computable" in result.rationale.lower()
     assert "not supplied" in result.rationale.lower()
 
@@ -79,10 +75,18 @@ def test_state_3_matrix_supplied_is_computed() -> None:
     assert 0.0 <= result.pbo_lower <= result.pbo_upper <= 1.0
 
 
-def test_the_gate_reads_the_upper_bound_not_the_point_estimate() -> None:
-    """A point estimate below 0.5 is not evidence against a null of 0.5."""
+def test_pbo_does_not_vote() -> None:
+    """The demotion, pinned. docs/pbo_calibration.md.
+
+    A false PASS on this row would read as "survived a rigorous overfitting test"
+    while carrying almost no evidence. There must be no verdict field to misread.
+    """
+    from null.stats.pbo import PBOResult
+
+    assert "passed" not in PBOResult.model_fields
     result = compute_pbo(_independent_noise(seed=99), n_trials=200)
-    assert result.passed == (result.pbo_upper < PBO_NULL)
+    assert "does not vote" in result.rationale
+    assert result.pbo_upper >= 0.0
 
 
 def test_low_pbo_caveat_appears_verbatim_in_every_state() -> None:
@@ -127,4 +131,4 @@ def test_pbo_is_a_probability() -> None:
 def test_rationale_names_the_partition_count_and_the_chance_baseline() -> None:
     text = compute_pbo(_independent_noise(), n_trials=200).rationale
     assert "12,870" in text
-    assert "0.50" in text or "chance" in text.lower()
+    assert "0.5" in text

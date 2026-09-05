@@ -1,0 +1,64 @@
+# Gate thresholds. BUILD.md §7. Every gate here votes on the verdict; the verdict
+# is an AND of all of them and defaults to REJECT.
+#
+# A gate that errors fails. A gate whose evidence is missing fails. Never add a
+# fallback that lets a strategy through on absent evidence.
+
+gates:
+  # Hard short-circuit. A fatal leakage flag ends the audit before any statistic
+  # is computed -- see null/verdict/engine.py.
+  leakage_clean:
+    required: true
+
+  beats_benchmark_net:
+    metric: alpha_tstat
+    min: 2.0
+
+  deflated_sharpe:
+    min: 0.95
+
+  reality_check:
+    max_p: 0.05
+
+  walkforward_consistency:
+    min_fold_win_rate: 0.60
+
+  sensitivity_plateau:
+    min_neighborhood_ratio: 0.60
+
+  capacity:
+    max_adv_participation: 0.05
+
+  drawdown_tolerance:
+    max_dd: 0.35
+
+# ---------------------------------------------------------------------------
+# Reported as evidence, deliberately NOT gates
+# ---------------------------------------------------------------------------
+#
+# pbo — BUILD.md §7 lists `pbo: {max: 0.5}`. It is deliberately absent above.
+#
+# Under the null of no selection skill every candidate is exchangeable, so the
+# in-sample winner's out-of-sample rank is uniform and PBO's expected value is
+# exactly 0.50 — precisely where the spec put the threshold, leaving the gate with
+# no power. Measured across seven seeds, overfit_grid rejected on five and passed
+# on two. Replacing the point estimate with a subsampling interval (reject unless
+# the upper bound clears 0.50) was principled and still passed pure noise on two
+# seeds in six.
+#
+# That residual is not a calibration error. The interval measures variability
+# across time windows of one path, while the variability that matters is across
+# candidate-set realisations — a distribution that is not present in a single
+# dataset and cannot be recovered by more machinery.
+#
+# Left as a gate it would be worse than absent: "PBO 0.275, upper 0.325, PASS"
+# reads as "survived a rigorous overfitting test" while carrying almost no
+# evidence. That is a persuasive artifact, the same class of harm as a nested PASS
+# inside a REJECT.
+#
+# PBO is still computed and printed on every report, with its interval and the
+# standing caveat that a low PBO is never evidence that an edge is real. It does
+# not vote. Full decision record: docs/pbo_calibration.md.
+#
+# What catches overfit_grid instead: deflated_sharpe, which rejects it on 7 of 7
+# seeds, and the expected-max-Sharpe diagnostic line that comes with it.
