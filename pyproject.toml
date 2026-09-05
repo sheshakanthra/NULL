@@ -29,6 +29,12 @@ dev = [
     "types-PyYAML>=6.0",
 ]
 
+[project.scripts]
+# Restored: this was deliberately dropped at M0 because null/cli.py did not exist
+# and shipping an entry point to a missing module is a broken install waiting to
+# happen. The module exists now.
+null = "null.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["null"]
 

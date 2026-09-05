@@ -165,14 +165,28 @@ def _weights_matrix(
     row = {ts: i for i, ts in enumerate(timeline)}
     col = {sym: j for j, sym in enumerate(universe)}
     held = np.zeros((len(timeline), len(universe)), dtype=np.float64)
+    matched = 0
     for weight in run.weights:
         j = col.get(weight.symbol)
         i = row.get(weight.ts)
         if j is None or i is None:
             continue
+        matched += 1
         start = i + run.decision_lag_bars
         if start < len(timeline):
             held[start:, j] = weight.weight
+
+    if run.weights and matched == 0:
+        # Every weight missed every bar. Left alone this produces an all-zero return
+        # series, which the gates would then judge as "no edge" -- reporting a verdict
+        # on a strategy that was never actually simulated. That is a broken input, and
+        # it has to say so rather than be quietly audited.
+        raise ValueError(
+            f"none of the {len(run.weights):,} target weights line up with a bar "
+            f"timestamp. First weight is at {run.weights[0].ts.isoformat()}; first bar "
+            f"is at {timeline[0].isoformat()}. Weight timestamps must match bar CLOSE "
+            "times exactly, including time of day and timezone."
+        )
 
     # held[k] is the position in force AT bar k. The return from bar k to bar k+1
     # is earned by the position held at bar k, so the alignment is held[:-1].
@@ -259,7 +273,11 @@ def benchmark_check(
     # --- benchmark pays its entry cost once (rule 2) --------------------------
     bench_gross = _bar_returns(benchmark_bars)
     bench_price = float(benchmark_bars[0].close)
-    bench_adv = benchmark_bars[0].adv_20 or 1.0
+    # An index level series has no traded volume. Rather than invent one -- which
+    # would charge a vast square-root impact against a fictional ADV -- the entry is
+    # sized against a notional far above the order so the impact term vanishes and
+    # only the spread and statutory charges apply.
+    bench_adv = benchmark_bars[0].adv_20 or (run.initial_capital * 1e6)
     bench_entry = costs.charge(
         symbol=benchmark_bars[0].symbol,
         side=Side.BUY,

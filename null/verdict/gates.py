@@ -184,6 +184,17 @@ def walkforward_consistency(evidence: Evidence, config: dict[str, Any]) -> GateR
 
 def sensitivity_plateau(evidence: Evidence, config: dict[str, Any]) -> GateResult:
     threshold = float(config["min_neighborhood_ratio"])
+    if len(evidence.sensitivity.points) <= 1:
+        # Only the peak was supplied, so there is no neighbourhood to judge. That is
+        # not a spike -- calling it curve-fitting would be an accusation the evidence
+        # does not support -- and it is not a pass either.
+        return not_computable(
+            "sensitivity_plateau",
+            "no parameter neighbourhood was supplied, only the submitted point, so "
+            "whether the result is a plateau or a spike cannot be determined. Run the "
+            "neighbourhood scan (null/sensitivity/neighborhood.py) and supply the "
+            "surface.",
+        )
     observed = evidence.sensitivity.neighborhood_ratio
     passed = observed >= threshold
     return _decide(
