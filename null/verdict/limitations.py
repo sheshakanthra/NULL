@@ -185,6 +185,48 @@ def _synthesised_evidence(
     )
 
 
+@register
+def _reviewed_market_events(
+    evidence: Evidence, context: dict[str, object]
+) -> Limitation | None:
+    count = context.get("reviewed_market_events", 0)
+    if not isinstance(count, int) or count <= 0:
+        return None
+    return Limitation(
+        key="reviewed_market_events",
+        severity="stated",
+        text=(
+            f"{count} large single-day price moves were accepted as genuine market "
+            "events by human review rather than being matched to a corporate action. "
+            "Each carries a checkable reason in configs/reviewed_market_events.csv "
+            "and is visible in git history. A human judged these; they were not "
+            "waived by configuration."
+        ),
+    )
+
+
+@register
+def _symbol_continuity(
+    evidence: Evidence, context: dict[str, object]
+) -> Limitation | None:
+    affected = context.get("symbols_without_corporate_actions", ())
+    if not isinstance(affected, (list, tuple)) or not affected:
+        return None
+    return Limitation(
+        key="symbol_continuity",
+        severity="blocking",
+        text=(
+            f"Symbol continuity across corporate restructuring is UNHANDLED, and "
+            f"{len(affected)} of the universe's symbols are affected: "
+            f"{', '.join(sorted(str(s) for s in affected))}. The corporate action "
+            "source keys on current symbols, so filings made under a prior identity "
+            "do not resolve. For an affected name the price series is NOT adjusted "
+            "for its historical splits, and any strategy trading it is being measured "
+            "across raw price discontinuities."
+        ),
+    )
+
+
 def collect_limitations(
     evidence: Evidence, context: dict[str, object]
 ) -> tuple[Limitation, ...]:

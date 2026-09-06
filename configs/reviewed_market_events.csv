@@ -1,0 +1,27 @@
+# Large single-day moves reviewed by a human and accepted as GENUINE MARKET EVENTS.
+#
+# This is the second of two sources of explanation for a >25% move. The first is the
+# corporate action calendar. A move matching NEITHER is a HARD FAIL -- this file is
+# not a waiver list, and adding a bare date to silence a failure defeats its purpose.
+#
+# Every row carries a REASON that can be checked against the public record. A date
+# with no reason is an escape hatch that will silently absorb the next real bug.
+# Committed so that additions and removals appear in git blame.
+#
+# REVIEWER PROVENANCE: the reason lines below were drafted by claude-opus-5 from the
+# public record and have NOT been independently confirmed by Sheshakanth. He directed
+# which categories belong here (genuine market events, plus the detected-but-
+# deliberately-unadjusted ADANIENT demerger); the specific attributions are mine and
+# should be verified before this file is treated as reviewed in the full sense.
+#
+symbol,date,observed_move_pct,reason,reviewer
+ADANIENT,2015-06-03,-82.77,"Demerger (Adani Ports / Adani Transmission). Detected by the calendar and DELIBERATELY not back-adjusted: value genuinely left the parent, so adjusting would inflate its history.",claude-opus-5
+ADANIENT,2019-05-20,27.37,"Post-election rally. Exit polls on 19 May 2019 pointed to an NDA majority and the broad market gapped up sharply on the next session.",claude-opus-5
+ADANIENT,2023-02-01,-28.20,"Hindenburg Research report fallout; the follow-on public offer was withdrawn on 1 Feb 2023.",claude-opus-5
+ADANIENT,2023-02-02,-26.70,"Continuation of the Hindenburg selloff on the session after the FPO withdrawal.",claude-opus-5
+AXISBANK,2020-03-23,-27.91,"COVID-19 crash. 23 Mar 2020 was the session that triggered the market-wide circuit breaker.",claude-opus-5
+BAJAJFINSV,2020-03-23,-25.86,"COVID-19 crash, same circuit-breaker session as AXISBANK.",claude-opus-5
+INDUSINDBK,2020-03-26,44.67,"Rebound from the COVID low; banking names bounced hard off the 24-25 Mar 2020 trough.",claude-opus-5
+INDUSINDBK,2025-03-11,-27.16,"Disclosure of discrepancies in the bank's derivatives portfolio accounting.",claude-opus-5
+SBIN,2017-10-25,27.69,"Government announcement of a Rs 2.11 lakh crore public sector bank recapitalisation on 24 Oct 2017.",claude-opus-5
+TATAMOTORS,2019-10-29,35.95,"Q2 FY20 results with a JLR turnaround, into the post-corporate-tax-cut rally.",claude-opus-5

@@ -58,12 +58,63 @@ class OHLCVCacheMissing(FileNotFoundError):
     """The OHLCV cache is absent. A stop, not a reason to reach for another source."""
 
 
+REVIEWED_EVENTS = (
+    Path(__file__).resolve().parents[2] / "configs" / "reviewed_market_events.csv"
+)
+
+#: Every other constituent has 69-89 actions over 15 years. A symbol with none is
+#: anomalous on its face, and the cause is usually symbol discontinuity across a
+#: restructuring rather than a genuinely event-free company.
+MIN_ACTIONS_PER_SYMBOL = 1
+
+
+class ReviewedEvent(NullModel):
+    symbol: NonEmptyStr
+    date: NonEmptyStr
+    reason: NonEmptyStr
+    reviewer: NonEmptyStr
+
+
+def load_reviewed_events(path: Path = REVIEWED_EVENTS) -> dict[tuple[str, str], "ReviewedEvent"]:
+    """Human-reviewed market events. The second source of explanation.
+
+    A row without a reason is rejected: a bare date list is a waiver, and a waiver
+    silently absorbs the next real bug.
+    """
+    import csv
+
+    if not path.exists():
+        return {}
+    out: dict[tuple[str, str], ReviewedEvent] = {}
+    with path.open(encoding="utf-8") as handle:
+        rows = [line for line in handle if not line.lstrip().startswith("#")]
+    for row in csv.DictReader(rows):
+        reason = (row.get("reason") or "").strip()
+        if not reason:
+            raise ValueError(
+                f"{path}: {row.get('symbol')} {row.get('date')} has no reason. "
+                "An entry without a checkable reason is a waiver, not a review."
+            )
+        event = ReviewedEvent(
+            symbol=str(row["symbol"]).strip(),
+            date=str(row["date"]).strip(),
+            reason=reason,
+            reviewer=(row.get("reviewer") or "unattributed").strip(),
+        )
+        out[(event.symbol, event.date)] = event
+    return out
+
+
 class OHLCVValidation(NullModel):
     is_valid: bool
     n_rows: int
     n_symbols: int
     suspicious_moves: tuple[NonEmptyStr, ...]
     """Single-day moves beyond the threshold, flagged not accepted."""
+    accepted_as_reviewed: tuple[NonEmptyStr, ...]
+    """Large moves explained by the reviewed-events file rather than the calendar."""
+    symbols_without_corporate_actions: tuple[NonEmptyStr, ...]
+    """Anomalous on its face -- usually symbol discontinuity across a restructuring."""
     zero_volume_days: tuple[NonEmptyStr, ...]
     negative_volume_days: tuple[NonEmptyStr, ...]
     years_outside_expected_day_count: tuple[NonEmptyStr, ...]
@@ -146,6 +197,7 @@ def validate_ohlcv(
     corporate_action_dates: dict[str, set[str]] | None = None,
     benchmark_dates: tuple[str, ...] | None = None,
     max_move: float = MAX_SINGLE_DAY_MOVE,
+    reviewed_events_path: Path | None = REVIEWED_EVENTS,
 ) -> OHLCVValidation:
     """Four checks, in the order a wrong series fails them.
 
@@ -162,8 +214,10 @@ def validate_ohlcv(
     """
     frame = _frame(path)
     actions = corporate_action_dates or {}
+    reviewed = load_reviewed_events(reviewed_events_path) if reviewed_events_path else {}
 
     suspicious: list[str] = []
+    accepted: list[str] = []
     zero_vol: list[str] = []
     negative_vol: list[str] = []
 
@@ -186,6 +240,11 @@ def validate_ohlcv(
                     day = days[k + 1]
                     if day in actions.get(symbol, set()):
                         continue
+                    event = reviewed.get((symbol, day))
+                    if event is not None:
+                        accepted.append(f"{symbol} {day} {float(move):+.1%}: {event.reason}")
+                        continue
+                    # Explained by neither the calendar nor a human review. Hard fail.
                     suspicious.append(f"{symbol} {day} {float(move):+.1%}")
         for k, index in enumerate(rows):
             vol = float(all_volume[index])
@@ -204,6 +263,16 @@ def validate_ohlcv(
             per_year.append(
                 f"{year}: {len(unique_days)} sessions, expected {low}-{high}"
             )
+
+    missing_actions: list[str] = []
+    if actions:
+        for symbol in sorted(by_symbol):
+            if len(actions.get(symbol, set())) < MIN_ACTIONS_PER_SYMBOL:
+                missing_actions.append(
+                    f"{symbol}: no corporate actions found over the whole window, "
+                    "while other constituents carry dozens. Usually symbol "
+                    "discontinuity across a restructuring, not an event-free company."
+                )
 
     mismatches: list[str] = []
     if benchmark_dates is not None:
@@ -227,12 +296,17 @@ def validate_ohlcv(
         parts.append(f"{len(per_year)} year(s) with an unexpected session count")
     if mismatches:
         parts.append(f"{len(mismatches)} calendar disagreement(s) with the benchmark")
+    if missing_actions:
+        parts.append(
+            f"{len(missing_actions)} symbol(s) with no corporate actions at all"
+        )
 
     n_symbols = len(by_symbol)
     rationale = (
-        f"{len(frame):,} rows across {n_symbols} symbols passed every "
-        "check: no unexplained single-day jumps, no bad volumes, session counts in "
-        "range, and the calendar agrees with the benchmark."
+        f"{len(frame):,} rows across {n_symbols} symbols passed every check: every "
+        f"large move is explained by the corporate action calendar or by one of "
+        f"{len(accepted)} human-reviewed market events, no bad volumes, session "
+        "counts in range."
         if is_valid
         else "Validation failed: " + "; ".join(parts) + ". Do not trust this series."
     )
@@ -242,6 +316,8 @@ def validate_ohlcv(
         n_rows=int(len(frame)),
         n_symbols=n_symbols,
         suspicious_moves=tuple(suspicious[:50]),
+        accepted_as_reviewed=tuple(accepted),
+        symbols_without_corporate_actions=tuple(missing_actions),
         zero_volume_days=tuple(zero_vol[:50]),
         negative_volume_days=tuple(negative_vol[:50]),
         years_outside_expected_day_count=tuple(per_year),
