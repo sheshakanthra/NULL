@@ -1,0 +1,62 @@
+symbol,date,raw_move_pct,implied_factor,calendar_factor,adjusted,residual_move_pct,announced_action
+ADANIENT,2015-06-03,-82.77,5.8041,0.0000,False,-82.77,no announced action
+ADANIENT,2019-05-20,27.37,0.7851,0.0000,False,27.37,no announced action
+ADANIENT,2023-02-01,-28.20,1.3927,0.0000,False,-28.20,no announced action
+ADANIENT,2023-02-02,-26.70,1.3642,0.0000,False,-26.70,no announced action
+ASIANPAINT,2013-07-30,-90.02,10.0209,10.0000,True,-0.21,Face Value Split Rs 10 To Re 1
+AXISBANK,2014-07-28,-80.09,5.0228,5.0000,True,-0.45,Face Value Split From Rs 10/- To Rs 2/- Per Share
+AXISBANK,2020-03-23,-27.91,1.3872,0.0000,False,-27.91,no announced action
+BAJAJFINSV,2020-03-23,-25.86,1.3488,0.0000,False,-25.86,no announced action
+BAJAJFINSV,2022-09-13,-89.59,9.6025,10.0000,True,4.14,Face Value Split (Sub-Division) - From Rs 5/- Per Share To Re 1/- Per Share + Bonus 1:1
+BAJFINANCE,2016-09-08,-89.79,9.7982,10.0000,True,2.06,Bonus 1:1/Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 2/- Per Share
+BAJFINANCE,2025-06-16,-89.95,9.9478,10.0000,True,0.53,Bonus 4:1 + Face Value Split (Sub-Division) - From Rs 2/- Per Share To Re 1/- Per Share
+BEL,2015-09-14,-67.26,3.0542,3.0000,True,-1.78,Bonus 2:1
+BEL,2017-03-16,-89.48,9.5044,10.0000,True,5.21,Face Value Split From Rs 10/- Per Share To Re 1/- Per Share
+BEL,2022-09-15,-66.92,3.0234,3.0000,True,-0.77,Bonus 2:1
+BPCL,2012-07-13,-50.79,2.0319,2.0000,True,-1.57,Annual General Meeting/ Dividend Rs 11/- Per Share/ Bonus 1:1
+BPCL,2016-07-13,-51.31,2.0538,2.0000,True,-2.62,Bonus 1:1
+BPCL,2017-07-13,-32.93,1.4910,1.5000,True,0.60,Bonus 1:2
+BPCL,2024-06-21,-50.88,2.0359,2.0000,True,-1.76,Bonus 1:1
+BRITANNIA,2018-11-29,-49.14,1.9660,2.0000,True,1.73,Face Value Split (Sub-Division) - From Rs 2/- Per Share To Re 1/- Per Share
+DRREDDY,2024-10-28,-79.87,4.9674,5.0000,True,0.66,Face Value Split (Sub-Division) - From Rs 5/- Per Share To Re 1/- Per Share
+EICHERMOT,2020-08-24,-89.97,9.9715,10.0000,True,0.29,Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share
+GRASIM,2016-10-06,-79.54,4.8886,5.0000,True,2.28,Face Value Split From Rs 10 To Re 2
+HCLTECH,2015-03-19,-51.18,2.0482,2.0000,True,-2.35,Bonus 1 : 1
+HCLTECH,2019-12-05,-50.16,2.0066,2.0000,True,-0.33,Bonus 1:1
+HDFCBANK,2011-07-14,-79.92,4.9801,5.0000,True,0.40,Face Value Split From Rs.10/- To Rs.2/-
+HDFCBANK,2019-09-19,-49.67,1.9870,2.0000,True,0.66,Face Value Split (Sub-Division) - From Rs 2 Per Share To Rs 1 Per Share
+HDFCBANK,2025-08-26,-50.44,2.0178,2.0000,True,-0.88,Bonus 1:1
+ICICIBANK,2014-12-04,-79.81,4.9533,5.0000,True,0.94,Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 2/- Per Share
+INDUSINDBK,2020-03-26,44.67,0.6912,0.0000,False,44.67,no announced action
+INDUSINDBK,2025-03-11,-27.16,1.3728,0.0000,False,-27.16,no announced action
+INFY,2014-12-02,-51.11,2.0454,2.0000,True,-2.22,Bonus 1:1
+INFY,2015-06-15,-49.85,1.9941,2.0000,True,0.30,Annual General Meeting/ Dividend - Rs 29.50/- Per Share And Bonus 1:1
+INFY,2018-09-04,-48.60,1.9457,2.0000,True,2.79,Bonus 1:1
+ITC,2016-07-01,-31.50,1.4599,1.5000,True,2.75,Bonus 1:2
+JSWSTEEL,2017-01-04,-90.09,10.0862,10.0000,True,-0.85,Fv Splt Frm Rs 10 To Re 1
+KOTAKBANK,2015-07-08,-50.40,2.0161,2.0000,True,-0.80,Bonus 1: 1
+LT,2013-07-11,-31.75,1.4652,1.5000,True,2.37,Bonus 1:2
+LT,2017-07-13,-32.45,1.4803,1.5000,True,1.33,Bonus 1:2
+M&M,2017-12-21,-51.86,2.0773,2.0000,True,-3.72,Bonus 1:1
+NESTLEIND,2024-01-05,-90.17,10.1697,10.0000,True,-1.67,Face Value Split (Sub-Division) - From Rs10/- Per Share To Re 1/- Per Share
+NESTLEIND,2025-08-08,-50.93,2.0379,2.0000,True,-1.86,Bonus 1:1
+ONGC,2011-02-08,-76.39,4.2352,4.0000,True,-5.55,Bonus 1:1 And Face Value Split From Rs.10/- To Rs.5/-
+ONGC,2016-12-15,-32.38,1.4788,1.5000,True,1.43,Bonus 1: 2
+POWERGRID,2021-07-29,-26.61,1.3626,1.3333,True,-2.15,Bonus 1:3
+POWERGRID,2023-09-12,-27.67,1.3826,1.3333,True,-3.57,Bonus 1:3
+RELIANCE,2017-09-07,-50.28,2.0112,2.0000,True,-0.56,Bonus 1:1
+RELIANCE,2024-10-28,-49.76,1.9903,2.0000,True,0.49,Bonus 1:1
+SBIN,2014-11-20,-89.79,9.7964,10.0000,True,2.08,Face Value Split Rs.10/- To Re.1/- Per Share
+SBIN,2017-10-25,27.69,0.7832,0.0000,False,27.69,no announced action
+SHRIRAMFIN,2025-01-10,-81.07,5.2817,5.0000,True,-5.33,Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 2/- Per Share
+SUNPHARMA,2013-07-29,-49.05,1.9628,2.0000,True,1.90,Bonus 1:1
+TATAMOTORS,2011-09-12,-80.87,5.2265,0.0000,False,-80.87,no announced action
+TATAMOTORS,2019-10-29,35.95,0.7356,0.0000,False,35.95,no announced action
+TATAMOTORS,2025-10-14,-40.15,1.6709,0.0000,False,-40.15,no announced action
+TATASTEEL,2022-07-28,-89.54,9.5605,10.0000,True,4.60,Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share
+TCS,2018-05-31,-50.46,2.0184,2.0000,True,-0.91,Bonus 1:1 /Dividend- Rs 29 Per Share
+TECHM,2015-03-19,-75.46,4.0755,4.0000,True,-1.85,Bonus 1:1 / Face Value Split - From Rs 10/- Per Share To Rs 5/- Per Share
+TITAN,2011-06-23,-94.67,18.7525,20.0000,True,6.65,Bonus 1:1 / Face Value Split From Rs.10/- To Re.1/-
+TRENT,2016-09-12,-89.70,9.7113,10.0000,True,2.97,Face Value Split From Rs 10 To Re 1
+WIPRO,2017-06-13,-50.79,2.0322,2.0000,True,-1.59,Bonus 1:1
+WIPRO,2024-12-03,-50.11,2.0043,2.0000,True,-0.21,Bonus 1:1

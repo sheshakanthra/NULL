@@ -19,7 +19,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 RAW = REPO / "data" / "reference" / "nifty50_ohlcv_raw.parquet"
 ADJUSTED = REPO / "data" / "reference" / "nifty50_ohlcv.parquet"
-EVENTS = REPO / "data" / "reference" / "inferred_corporate_actions.csv"
+EVENTS = REPO / "data" / "reference" / "reconciled_large_moves.csv"
 
 
 def main() -> int:

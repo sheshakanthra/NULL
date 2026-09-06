@@ -1,0 +1,11 @@
+{
+  "endpoint_shape_is_provenance": "The API needs a session cookie from the corporate-actions page. A non-JSON body means the bootstrap was rejected or the endpoint moved -- re-capture the live request, do not cycle headers.",
+  "fetched_on": "2026-09-06",
+  "method": "GET, after a session-cookie bootstrap from the page",
+  "page": "https://www.nseindia.com/companies-listing/corporate-filings-actions",
+  "query_shape": "?index=equities&from_date=DD-MM-YYYY&to_date=DD-MM-YYYY",
+  "rows": 1201,
+  "scope": "NIFTY 50 constituents, 2011-2025",
+  "source": "https://www.nseindia.com/api/corporates-corporateActions",
+  "symbols": 49
+}

@@ -1,0 +1,50 @@
+{
+  "endpoint_shape_is_provenance": "NSE changed the bhavcopy URL and column layout in July 2024. The handler definitions above are themselves provenance and may need re-capture. An HTML body where a zip is expected means the URL shape has moved: add a handler, do not cycle headers.",
+  "fetched_on": "2026-09-05",
+  "first_date": "2011-01-03",
+  "format_handlers": [
+    {
+      "columns": {
+        "CLOSE": "close",
+        "HIGH": "high",
+        "LOW": "low",
+        "OPEN": "open",
+        "SYMBOL": "symbol",
+        "TIMESTAMP": "date",
+        "TOTTRDQTY": "volume",
+        "TOTTRDVAL": "value_traded"
+      },
+      "name": "legacy_cm_bhavcopy",
+      "series_column": "SERIES",
+      "url_template": "https://nsearchives.nseindia.com/content/historical/EQUITIES/%Y/{MON}/cm%d{MON}%Ybhav.csv.zip",
+      "valid_from": "1996-01-01",
+      "valid_to": "2024-07-05"
+    },
+    {
+      "columns": {
+        "ClsPric": "close",
+        "HghPric": "high",
+        "LwPric": "low",
+        "OpnPric": "open",
+        "TckrSymb": "symbol",
+        "TradDt": "date",
+        "TtlTradgVol": "volume",
+        "TtlTrfVal": "value_traded"
+      },
+      "name": "udiff_2024",
+      "series_column": "SctySrs",
+      "url_template": "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_%Y%m%d_F_0000.csv.zip",
+      "valid_from": "2024-07-08",
+      "valid_to": null
+    }
+  ],
+  "last_date": "2025-12-31",
+  "rows": 175904,
+  "rows_per_format_handler": {
+    "legacy_cm_bhavcopy": 157501,
+    "udiff_2024": 18403
+  },
+  "scope": "NIFTY 50 constituents as supplied by --symbols; daily; 15 years",
+  "symbols": 50,
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+}
