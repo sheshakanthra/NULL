@@ -60,7 +60,7 @@ border-radius:3px;padding:1px 5px;margin-right:7px;text-transform:uppercase}
     <div>
       <h1>overfit_grid</h1>
       <p class="sub mono">5,000 trials &middot; 504
-      observations &middot; evidence 8ac1e85b9efb &middot;
+      observations &middot; evidence ee2b44b4b0f1 &middot;
       spec 0.3.0</p>
     </div>
     <div class="badge reject">REJECT</div>
@@ -83,19 +83,19 @@ border-radius:3px;padding:1px 5px;margin-right:7px;text-transform:uppercase}
 <div class="gate pass"><span class="icon">✓</span><span class="name">walkforward_consistency</span><span class="cmp mono">0.6 vs 0.6</span></div>
 <div class="gate fail"><span class="icon">✗</span><span class="name">sensitivity_plateau</span><span class="cmp mono">0.23 vs 0.6</span></div>
 <div class="gate nc"><span class="icon">–</span><span class="name">capacity<span class="tag">NOT COMPUTABLE</span></span><span class="cmp mono">no evidence</span></div>
-<div class="gate pass"><span class="icon">✓</span><span class="name">drawdown_tolerance</span><span class="cmp mono">0.1168 vs 0.35</span></div>
 
   <h2>Why it failed</h2>
 <p class="fail"><span class="g">beats_benchmark_net</span>No alpha over buy-and-hold after costs. Strategy returned 12.89% CAGR net of everything against -20.42% for the benchmark, beta 0.12. Annualised alpha 0.40% with a t-stat of 0.31 (Newey-West, 6 lags) over 504 observations; threshold is 2.0, and alpha with a t-stat below 2 is not alpha.</p>
 <p class="fail"><span class="g">deflated_sharpe</span>The probability the true Sharpe exceeds zero, after adjusting for how many variants were tried and for the shape of the return distribution, is 0.37 against a threshold of 0.95. Adjusted for selection, this is a search finding noise.</p>
 <p class="fail"><span class="g">reality_check</span>Bootstrapping the null that the best candidate does not beat the benchmark, using a stationary bootstrap so autocorrelation survives resampling, gives p = 0.095 against a threshold of 0.050. The outperformance is within what chance produces on this history.</p>
 <p class="fail"><span class="g">sensitivity_plateau</span>The mean Sharpe of the immediate parameter neighbourhood is 23% of the peak (0.19 against 0.82), threshold 60%. A spike is curve-fitting: the result depends on the exact parameters chosen, and neighbouring values do not work.</p>
-<p class="nc"><span class="g">capacity</span>Not computable: Evidence carries no per-order ADV participation, so the share of daily traded volume this strategy would consume cannot be checked. Order-level participation data is required. This gate did not judge the strategy either way. It does not count as a pass -- a strategy cannot clear a test that was never run -- but it is reported separately from a genuine failure so the difference stays visible.</p>
+<p class="nc"><span class="g">capacity</span>Not computable: max_adv_participation was not supplied, so the share of daily traded volume this strategy would consume cannot be checked. It is computable from weight changes and Bar.adv_20 during evidence build. This gate did not judge the strategy either way. It does not count as a pass -- a strategy cannot clear a test that was never run -- but it is reported separately from a genuine failure so the difference stays visible.</p>
 <p><span class="g">selection diagnostic</span>With 5,000 trials over 504 observations, noise alone is expected to produce a maximum Sharpe of 1.06; the candidate showed 0.82, so the search cannot distinguish this edge from luck.</p>
 
   <h2>Evidence panels</h2>
   <p class="note">These are reported for context and <strong>do not vote</strong>
   on the verdict.</p>
+<div class="panel"><span class="g">drawdown</span>Maximum peak-to-trough decline was 11.7%, with the longest underwater period lasting 109 bars. Reported for context; it does not vote. Drawdown answers whether you would hold a strategy, which is a preference about risk appetite, not whether it has an edge. A 35% limit would reject a NIFTY-like buy-and-hold, which draws down around 60% through 2008.</div>
 <div class="panel"><span class="g">mtrl</span>An annualised Sharpe of 0.82, with skew -0.11 and kurtosis 3.37, would need 4.0 years of observations before it could be called significant at 95% confidence. The backtest is 2.0 years long, so it is under-powered by construction: this Sharpe would need a longer track record than exists before it could be called significant, and no analysis of the existing data changes that.</div>
 <div class="panel"><span class="g">pbo</span>Across 12,870 symmetric train/test partitions of 1,000 variants, the in-sample best landed below the out-of-sample median 77% of the time (median relative rank 0.26). Under no selection skill every candidate is exchangeable and PBO&#x27;s expected value is exactly 0.5, so the point estimate alone proves nothing; a moving-block subsampling interval over 15 moving-block subsamples of the underlying series gives [0.76, 1.00] at 95% confidence, and the interval reaches 1.00, at or above the 0.5 null. This is reported as evidence only and does not vote on the verdict. Each replicate used a random 512 of the 12,870 partitions to keep the cost tractable; the point estimate uses all of them. A low PBO is never evidence that an edge is real. With many candidates over a short sample, the maximum of N noise Sharpes routinely exceeds a genuine edge&#x27;s own Sharpe, so the real strategy is not the one selected and PBO ends up describing a search that never found it.</div>
 </div>
@@ -104,7 +104,7 @@ border-radius:3px;padding:1px 5px;margin-right:7px;text-transform:uppercase}
   <h2>Stated limitations &mdash; all of them</h2>
   <ul>
 <li><span class="sev">blocking</span>Charge rates have NOT been reconciled against a live broker charge list (configs/costs_india_equity.yaml carries _verified_on: UNVERIFIED). Every cost figure on this report is indicative only, and rates wrong in the optimistic direction inflate every result shown here.</li>
-<li><span class="sev">blocking</span>The benchmark series is supplied by the caller and NULL does not select it. It has not been confirmed as a total-return index. If it is a price index, roughly 1.2-1.5%/yr of dividends are missing from the benchmark and every alpha figure here is overstated by that much.</li>
+<li><span class="sev">blocking</span>The benchmark series has NOT been confirmed as a total-return index. If it is the NIFTY price index, the alpha above is overstated by roughly 1.35%/yr: NSE reports 11.09% annualised for the price index against 12.44% for total return over the 20 years to February 2026, and that gap is dividends the price index omits. NULL never substitutes the price index on its own -- a missing TRI raises rather than falling back -- so this warning means a caller supplied one.</li>
 <li><span class="sev">blocking</span>The universe is NOT point-in-time. No index-membership source is wired up, so symbols that were not constituents on a given date cannot be detected and delisted names may be silently absent. A survivorship-biased universe inflates returns.</li>
 <li><span class="sev">blocking</span>5 of the leakage checks in BUILD.md section 5 could not run and were not evaluated: point-in-time constituency, universe rebalance timing, delisting terminal values, corporate-action confirmation, and NaN forward-fill detection. A clean leakage result is only as strong as this list is short.</li>
 <li><span class="sev">stated</span>Risk-free rate assumed to be zero; NULL has no risk-free series. Beta is unaffected; alpha is shifted by (1 - beta) times the true rate.</li>
