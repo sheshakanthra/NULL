@@ -373,3 +373,142 @@ def test_best_variant_builds_a_valid_strategy_run_with_honest_n_trials(
     assert run.n_trials == len(variants)
     assert len(run.trials) == len(variants)
     assert run.param_hash == best.variant.param_hash
+
+
+# ---------------------------------------------------------------------------
+# the split artifact: lean run.json + sibling trial-returns parquet
+# ---------------------------------------------------------------------------
+
+
+def test_write_run_artifacts_produces_a_lean_json_and_a_sibling_parquet(
+    tiny_universe_bars, costs, tmp_path
+) -> None:
+    from examples.rsi2_nifty.build_run import write_run_artifacts
+    from null.contracts import StrategyRun
+
+    variants = ALL_VARIANTS[:8]
+    results = run_grid(
+        bars=tiny_universe_bars,
+        universe=("AAA", "BBB", "CCC"),
+        costs=costs,
+        initial_capital=1_000_000.0,
+        variants=variants,
+    )
+    run_out = tmp_path / "run.json"
+    trials_out = tmp_path / "run.trials.parquet"
+    write_run_artifacts(
+        results,
+        universe=("AAA", "BBB", "CCC"),
+        initial_capital=1_000_000.0,
+        run_out=run_out,
+        trials_parquet_out=trials_out,
+        n_trials=len(variants),
+    )
+
+    assert run_out.exists() and trials_out.exists()
+    run = StrategyRun.model_validate_json(run_out.read_bytes())
+    assert run.n_trials == len(variants)
+    assert len(run.trials) == len(variants)
+    # The point of the split: no trial embeds a full return Series in run.json.
+    assert all(t.returns is None for t in run.trials)
+
+    import pandas as pd
+
+    trials_frame = pd.read_parquet(trials_out)
+    assert "date" in trials_frame.columns
+    for trial in run.trials:
+        assert trial.param_hash in trials_frame.columns
+
+
+def test_write_run_artifacts_is_byte_identical_across_two_runs(
+    tiny_universe_bars, costs, tmp_path
+) -> None:
+    """The determinism assertion covers BOTH files, not just run.json."""
+    from examples.rsi2_nifty.build_run import write_run_artifacts
+
+    variants = ALL_VARIANTS[:8]
+    results = run_grid(
+        bars=tiny_universe_bars,
+        universe=("AAA", "BBB", "CCC"),
+        costs=costs,
+        initial_capital=1_000_000.0,
+        variants=variants,
+    )
+
+    first_json, first_parquet = tmp_path / "a" / "run.json", tmp_path / "a" / "run.trials.parquet"
+    second_json, second_parquet = tmp_path / "b" / "run.json", tmp_path / "b" / "run.trials.parquet"
+
+    write_run_artifacts(
+        results, universe=("AAA", "BBB", "CCC"), initial_capital=1_000_000.0,
+        run_out=first_json, trials_parquet_out=first_parquet, n_trials=len(variants),
+    )
+    write_run_artifacts(
+        results, universe=("AAA", "BBB", "CCC"), initial_capital=1_000_000.0,
+        run_out=second_json, trials_parquet_out=second_parquet, n_trials=len(variants),
+    )
+
+    assert first_json.read_bytes() == second_json.read_bytes()
+    assert first_parquet.read_bytes() == second_parquet.read_bytes()
+
+
+def test_the_sibling_parquet_restores_full_pbo_evidence_via_the_cli_enricher(
+    tiny_universe_bars, costs, tmp_path
+) -> None:
+    """The split must not silently cost PBO its real evidence: round-trip through
+    the same enrichment function null/cli.py uses before auditing."""
+    from examples.rsi2_nifty.build_run import write_run_artifacts
+    from null.cli import enrich_trials_from_parquet
+    from null.contracts import StrategyRun
+
+    variants = ALL_VARIANTS[:8]
+    results = run_grid(
+        bars=tiny_universe_bars,
+        universe=("AAA", "BBB", "CCC"),
+        costs=costs,
+        initial_capital=1_000_000.0,
+        variants=variants,
+    )
+    run_out, trials_out = tmp_path / "run.json", tmp_path / "run.trials.parquet"
+    write_run_artifacts(
+        results, universe=("AAA", "BBB", "CCC"), initial_capital=1_000_000.0,
+        run_out=run_out, trials_parquet_out=trials_out, n_trials=len(variants),
+    )
+
+    lean = StrategyRun.model_validate_json(run_out.read_bytes())
+    assert all(t.returns is None for t in lean.trials)
+
+    enriched = enrich_trials_from_parquet(lean, trials_out)
+    assert all(t.returns is not None for t in enriched.trials)
+
+    # The rehydrated returns must match what the grid actually produced, not
+    # merely be present.
+    by_hash = {r.variant.param_hash: r for r in results}
+    for trial in enriched.trials:
+        assert trial.returns is not None
+        original = by_hash[trial.param_hash].net_returns
+        assert trial.returns.values == pytest.approx(original.values)
+
+
+def test_per_period_trial_sharpes_are_not_annualised() -> None:
+    """The exact bug caught while building this: deflated_sharpe_ratio expects
+    per-period trial Sharpes, and feeding it already-annualised ones inflates
+    expected_max_sharpe by a further sqrt(252). A synthetic check with a known
+    per-period Sharpe pins the scale so this cannot silently regress."""
+    from examples.rsi2_nifty.build_run import per_period_trial_sharpes
+
+    class _Stub:
+        def __init__(self, values):
+            class _R:
+                def to_numpy(self_inner):
+                    return values
+            self.net_returns = _R()
+
+    rng = np.random.default_rng(3)
+    # Construct a series with a KNOWN per-period Sharpe of exactly 0.05.
+    raw = rng.normal(0.0, 1.0, 500)
+    raw = (raw - raw.mean()) / raw.std(ddof=1)
+    values = raw * 0.01 + 0.05 * 0.01
+    result = per_period_trial_sharpes((_Stub(values),))
+    assert result[0] == pytest.approx(0.05, abs=1e-9)
+    # Emphatically not the annualised value (0.05 * sqrt(252) ~= 0.79).
+    assert result[0] != pytest.approx(0.05 * np.sqrt(252), rel=0.5)

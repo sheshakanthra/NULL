@@ -447,3 +447,129 @@ def run_json_for(tmp_path: Path, bars_parquet: Path) -> Path:
     path = tmp_path / "leaky.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+# ---------------------------------------------------------------------------
+# --trials-parquet: a run.json may legitimately omit per-trial returns to stay
+# small, and this restores real PBO evidence from a sibling file rather than
+# silently degrading to NOT_COMPUTABLE.
+# ---------------------------------------------------------------------------
+
+
+def test_enrich_trials_from_parquet_restores_real_returns(tmp_path) -> None:
+    from null.cli import enrich_trials_from_parquet
+    from null.contracts import StrategyRun, TargetWeight, TrialRecord
+
+    stamps = [datetime(2022, 1, 3 + i, 15, 30, tzinfo=IST) for i in range(5)]
+    run = StrategyRun(
+        strategy_id="grid",
+        param_hash="best",
+        n_trials=2,
+        universe=("AAA",),
+        weights=(TargetWeight(ts=stamps[0], symbol="AAA", weight=1.0),),
+        initial_capital=1_000_000.0,
+        trials=(
+            TrialRecord(param_hash="hash_a", sharpe=1.5, returns=None),
+            TrialRecord(param_hash="hash_b", sharpe=0.2, returns=None),
+        ),
+    )
+    assert all(t.returns is None for t in run.trials)
+
+    frame = pd.DataFrame(
+        {
+            "date": [pd.Timestamp(s) for s in stamps],
+            "hash_a": [0.01, -0.02, 0.03, 0.0, 0.01],
+            "hash_b": [0.00, 0.00, -0.01, 0.02, -0.01],
+        }
+    )
+    path = tmp_path / "trials_test.parquet"
+    frame.to_parquet(path, index=False)
+
+    enriched = enrich_trials_from_parquet(run, path)
+    assert all(t.returns is not None for t in enriched.trials)
+    a = next(t for t in enriched.trials if t.param_hash == "hash_a")
+    assert a.returns is not None
+    assert list(a.returns.values) == pytest.approx([0.01, -0.02, 0.03, 0.0, 0.01])
+    # The original run object is untouched -- frozen models, a new one returned.
+    assert all(t.returns is None for t in run.trials)
+
+
+def test_enrich_trials_from_parquet_raises_on_a_missing_trial_column(tmp_path) -> None:
+    from null.cli import InputError, enrich_trials_from_parquet
+    from null.contracts import StrategyRun, TargetWeight, TrialRecord
+
+    stamps = [datetime(2022, 1, 3, 15, 30, tzinfo=IST)]
+    run = StrategyRun(
+        strategy_id="grid",
+        param_hash="best",
+        n_trials=2,
+        universe=("AAA",),
+        weights=(TargetWeight(ts=stamps[0], symbol="AAA", weight=1.0),),
+        initial_capital=1_000_000.0,
+        trials=(
+            TrialRecord(param_hash="hash_a", sharpe=1.5, returns=None),
+            TrialRecord(param_hash="hash_missing", sharpe=0.2, returns=None),
+        ),
+    )
+    frame = pd.DataFrame({"date": [pd.Timestamp(stamps[0])], "hash_a": [0.01]})
+    path = tmp_path / "trials_partial.parquet"
+    frame.to_parquet(path, index=False)
+
+    with pytest.raises(InputError, match="hash_missing|missing columns"):
+        enrich_trials_from_parquet(run, path)
+
+
+def test_trials_parquet_gives_pbo_real_evidence_instead_of_not_computable(
+    run_json, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    """End to end: a lean run.json plus --trials-parquet must reach compute_pbo
+    with a real matrix, not fall back to NOT_COMPUTABLE."""
+    frame = pd.read_parquet(bars_parquet)
+    stamps = sorted({d for d in frame["date"]})
+    payload = json.loads(run_json.read_text())
+    payload["n_trials"] = 3
+    payload["trials"] = [
+        {"param_hash": "h0", "sharpe": 0.9},
+        {"param_hash": "h1", "sharpe": 0.3},
+        {"param_hash": "h2", "sharpe": -0.1},
+    ]
+    lean = tmp_path / "lean_run.json"
+    lean.write_text(json.dumps(payload), encoding="utf-8")
+
+    # bars_parquet's own "date" column is naive midnight -- load_bars is what
+    # normalises it to 15:30 IST bar-close time. The strategy's own return
+    # series (bench.strategy_returns.ts) will carry THOSE normalised
+    # timestamps, so the trial parquet's dates must match that shape.
+    localised = [
+        pd.Timestamp(s).replace(hour=15, minute=30).tz_localize(IST) for s in stamps
+    ]
+    rng = np.random.default_rng(5)
+    n = len(localised) - 1
+    trials_frame = pd.DataFrame(
+        {
+            "date": localised[1:],
+            "h0": rng.normal(0.001, 0.01, n),
+            "h1": rng.normal(0.0002, 0.01, n),
+            "h2": rng.normal(-0.0005, 0.01, n),
+        }
+    )
+    trials_path = tmp_path / "run.trials.parquet"
+    trials_frame.to_parquet(trials_path, index=False)
+
+    out = tmp_path / "enriched_out"
+    argv = _argv(lean, bars_parquet, out, benchmark=benchmark_parquet)
+    argv += ["--trials-parquet", str(trials_path)]
+    main(argv)
+
+    verdict = json.loads((out / "verdict.json").read_text())
+    report_html = (out / "report.html").read_text()
+    assert "pbo" not in {g["name"] for g in verdict["gates"]}  # panel, not a gate
+
+    # Isolate the PBO panel specifically -- other things on the page (e.g. the
+    # unrelated sensitivity_plateau gate) legitimately say "not computable" in
+    # this smoke scenario, so the assertion must not be page-wide.
+    pbo_start = report_html.lower().index('class="g">pbo</span>')
+    pbo_panel = report_html.lower()[pbo_start : pbo_start + 900]
+    assert "not applicable" not in pbo_panel
+    assert "not computable" not in pbo_panel
+    assert "symmetric train/test partitions" in pbo_panel  # real computed evidence

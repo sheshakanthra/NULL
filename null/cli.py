@@ -105,6 +105,51 @@ def load_run(path: Path) -> StrategyRun:
         raise InputError(_readable_validation_error(path, exc)) from exc
 
 
+def enrich_trials_from_parquet(run: StrategyRun, path: Path) -> StrategyRun:
+    """Rehydrate ``run.trials[i].returns`` from a sibling trial-returns parquet.
+
+    A ``run.json`` may legitimately omit per-trial return series -- the contract
+    says so explicitly: "trials may be empty or a subset ... never a substitute
+    for n_trials." That is what lets a large grid's run.json stay small. But
+    dropping the return series silently costs PBO its real evidence and leaves it
+    reporting NOT_COMPUTABLE, which is a genuine loss of audit fidelity, not a
+    convenience. This is the other half: given a sibling file, restore it.
+
+    Schema: a wide-format parquet with a ``date`` column (bar-close timestamps,
+    matching the strategy's own return series) plus one float column per trial,
+    named by that trial's ``param_hash``. One row per date, shared across every
+    trial -- true whenever every variant was backtested over the same bars, which
+    a parameter grid search always is.
+
+    Raises rather than silently proceeding with partial data if a trial's
+    param_hash has no matching column: a partially-enriched trial set would look
+    complete and quietly understate the evidence PBO sees.
+    """
+    import pandas as pd
+
+    frame = pd.read_parquet(path)
+    if "date" not in frame.columns:
+        raise InputError(f"{path} has no 'date' column; not a trial-returns parquet.")
+    stamps = tuple(ts.to_pydatetime() for ts in pd.to_datetime(frame["date"]))
+
+    missing = [t.param_hash for t in run.trials if t.param_hash not in frame.columns]
+    if missing:
+        raise InputError(
+            f"{path} is missing columns for {len(missing)} trial(s) declared in the "
+            f"run, e.g. {missing[0]!r}. Every trial must be fully enriched or not "
+            "enriched at all -- a partial join would understate PBO's evidence "
+            "while looking complete."
+        )
+
+    enriched = tuple(
+        trial.model_copy(
+            update={"returns": _series(frame[trial.param_hash].to_numpy(), stamps)}
+        )
+        for trial in run.trials
+    )
+    return run.model_copy(update={"trials": enriched})
+
+
 def _series(values: np.ndarray, stamps: Sequence[object]) -> Series:
     return Series(
         ts=tuple(stamps),  # type: ignore[arg-type]
@@ -313,6 +358,8 @@ def run_audit_command(args: argparse.Namespace) -> int:
         )
 
     run = load_run(Path(args.run))
+    if args.trials_parquet:
+        run = enrich_trials_from_parquet(run, Path(args.trials_parquet))
 
     try:
         costs = IndiaEquityCostModel.from_yaml(Path(args.costs))
@@ -403,6 +450,16 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--costs", default=str(DEFAULT_COSTS))
     audit.add_argument("--bars", default=None, help="OHLCV parquet (default: cache)")
     audit.add_argument("--benchmark", default=None, help="benchmark parquet")
+    audit.add_argument(
+        "--trials-parquet",
+        default=None,
+        help=(
+            "sibling parquet of per-trial return series (wide format: a 'date' "
+            "column plus one column per trial param_hash), for when run.json "
+            "declares its trials without embedding full Series -- restores real "
+            "PBO evidence instead of NOT_COMPUTABLE"
+        ),
+    )
     audit.add_argument("--out", default=".", help="output directory")
     audit.add_argument("--force", action="store_true", help="overwrite verdict.json")
     return parser
