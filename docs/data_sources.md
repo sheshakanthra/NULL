@@ -1,29 +1,72 @@
-# STATUS: TRI source decided, loader built, DATA NOT YET FETCHED
+# STATUS: TRI route located and corrected; still not fetched from this environment
 
-**Decision (Sheshakanth):** NIFTY 50 TRI comes from NSE Indices directly, via
-`POST niftyindices.com/Backpage.aspx/getTotalReturnIndexString`. Authoritative
-publisher, no proxy caveat. The ETF-NAV proxy option is dropped. The price index is
-not a fallback and is unreachable in code, not merely deprecated.
+**Decision (Sheshakanth):** NIFTY 50 TRI comes from NSE Indices directly. The
+ETF-NAV proxy option is dropped. The price index is not a fallback and is
+unreachable in code, not merely deprecated.
 
-**Blocker: the endpoint refuses this environment.** `scripts/fetch_tri.py` is
-written, correct and ready. Run against a single 10-day window it returns HTTP 200
-with `Content-Type: text/html` and 93,810 bytes -- the page, not the web-method
-response. That is byte-identical to three earlier attempts in the same session
-using a bare POST, a cookie-bootstrapped session, and a full browser header set
-with a valid `ASP.NET_SessionId`. A control POST to httpbin and postman-echo echoes
-correctly, so the sandbox is not the constraint; Akamai fronts niftyindices and
-serves the page to clients without a full browser fingerprint.
+## Update — the route had moved, found by reading the page's own JS
 
-**Consequence:** no parquet is committed, so the validation gate below has not run
-against real data and `null audit` has no benchmark series. Nothing has been
+The original endpoint, `POST niftyindices.com/Backpage.aspx/getTotalReturnIndexString`,
+returned HTTP 200 with `Content-Type: text/html` and 93,810 bytes on every attempt
+across two sessions -- the page, not the web-method response. Four attempts (bare
+POST, cookie-bootstrapped session, full browser headers with a valid
+`ASP.NET_SessionId`, and a repeat of the cookie-bootstrap pattern that worked for
+NSE's corporate-actions API) all produced the identical byte count, which is the
+signature of a request that never reaches the ScriptService method at all.
+
+Rather than try a fifth header variation, the historical-data page's own scripts
+were read directly. `niftyindices.com/reports/historical-data` no longer contains
+the strings `Backpage` or `getTotalReturnIndexString` anywhere -- the page has been
+rebuilt onto a separate asset host, `liveindexsa.niftyindices.com`. Its
+`IISLComponet.js` contains the live call:
+
+```
+url: "/BackPage/getTotalReturnIndexString"
+```
+
+Case changed (`Backpage.aspx` to `BackPage`, no `.aspx`) and the path segment
+changed. The `cinfo` payload shape -- `{'name', 'startDate', 'endDate', 'indexName'}`
+-- is byte-for-byte unchanged.
+
+**Two shaped attempts against the corrected route, as instructed, no header
+cycling:**
+
+| # | request | result |
+|---|---|---|
+| 1 | Cookie bootstrap from `/reports/historical-data`, then POST to the corrected `www.niftyindices.com/BackPage/...` | Bootstrap sets **zero cookies** (`nseindia.com`'s corporate-actions bootstrap sets four: `nsit`, `AKA_A2`, `_abck`, `bm_sz`). With no session to carry, the cookie-bootstrap pattern that worked for corporate actions does not apply here -- there is nothing to carry. POST returned the same 93,810-byte page. |
+| 2 | Direct POST to the corrected route, both hosts | `www.niftyindices.com/BackPage/...`: **200, 1,144 bytes** -- a materially different response from the 93,810-byte page, so the route correction changed something real. Reading the body on retry failed twice, first with a socket read timeout and then with `ConnectionResetError [WinError 10054]` -- the remote host is tearing the connection down before the body can be read a second time. `liveindexsa.niftyindices.com/BackPage/...`: **405, method not supported** -- that host's route doesn't accept POST at all. |
+
+The 1,144-byte response on the `www` host is the most promising signal so far: it
+is not the page, and it is a small enough body to plausibly be a JSON error or a
+redirect stub rather than HTML. It has not been read, because reading it a second
+time is what triggered the reset, and a third attempt would be cycling rather than
+a new shaped attempt.
+
+## Fallback checked: NSE Indices' downloadable index files
+
+Per instruction, checked whether niftyindices exposes the same series as a static
+download before concluding. `nsearchives.nseindia.com/content/indices/ind_close_all_DDMMYYYY.csv`
+is reachable and returns real data (confirmed: 200, `text/csv`, 108 index rows for
+04-Jan-2024) -- but its "Nifty 50" row reads **21,658.6**, which is the **price
+index** level for that date, not TRI (a TRI series compounding since a 1996 base
+would sit far higher). No TRI-named variant appears among the 108 indices in that
+file. **This fallback does not carry the series NULL needs.**
+
+## Consequence
+
+No parquet is committed. `null audit` has no benchmark series and the loader
+raises rather than falling back, by design. `scripts/fetch_tri.py` is updated to
+the corrected URL (`BackPage/getTotalReturnIndexString`, no `.aspx`), with the
+superseded route kept in the file as `LEGACY_URL` for the record. Nothing has been
 fabricated to fill the gap.
 
-**To unblock:** run `python scripts/fetch_tri.py --refresh` from an environment that
-can reach the site (an ordinary desktop browser session usually can), then commit
-`data/reference/nifty50_tri.parquet` and its `.provenance.json` sidecar. The loader
-and validator are already wired to it, and
-`tests/unit/test_tri_loader.py::test_committed_cache_loads_and_validates` unskips
-itself the moment the file exists.
+## To unblock
+
+The 1,144-byte body is the next thing to read, from an environment where the
+connection does not reset -- ordinary desktop browser DevTools, watching the
+Network tab on the historical-data page, would show both the exact request the
+browser sends and the response body directly. Compare that request against
+`scripts/fetch_tri.py` line by line; whatever differs is the missing piece.
 
 ## What is built and tested
 

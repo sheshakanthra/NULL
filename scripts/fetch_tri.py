@@ -35,7 +35,12 @@ REPO = Path(__file__).resolve().parents[1]
 CACHE = REPO / "data" / "reference" / "nifty50_tri.parquet"
 SIDECAR = REPO / "data" / "reference" / "nifty50_tri.provenance.json"
 
-URL = "https://www.niftyindices.com/Backpage.aspx/getTotalReturnIndexString"
+URL = "https://www.niftyindices.com/BackPage/getTotalReturnIndexString"
+#: Superseded route, kept for the record. Case and path both changed:
+#: Backpage.aspx/getTotalReturnIndexString -> BackPage/getTotalReturnIndexString.
+#: Found by reading the live JS the historical-data page now loads from
+#: liveindexsa.niftyindices.com/assets/js/IISLComponet.js, not by guessing.
+LEGACY_URL = "https://www.niftyindices.com/Backpage.aspx/getTotalReturnIndexString"
 INDEX_NAME = "NIFTY 50"
 HISTORY_START = date(1999, 1, 1)
 
