@@ -440,11 +440,44 @@ Reproduce the reel's claim on your own harness.
 
 1. Implement RSI(2) mean-reversion on NIFTY 50 constituents, daily, long-only.
 2. Grid search it: RSI period {2,3,4}, entry {5,10,15}, exit {50,60,70}, holding cap
-   {3,5,10} → 108 variants. **Record `n_trials=108` honestly.**
+   {3,5,10,15} → 108 variants. **Record `n_trials=108` honestly.**
+   (Holding cap corrected from {3,5,10} — see *Spec correction* below.)
 3. Run the best variant through NULL.
 4. Expected output: REJECT, with the deflation number and the after-cost benchmark
    comparison stated in one sentence each.
 5. Commit the `verdict.json` and the rendered HTML to `examples/rsi2_nifty/`.
+
+### Spec correction — the fourth holding-cap value *(settled; not an open question)*
+
+This section originally specified holding cap **{3,5,10}** while also asserting the grid
+has **108 variants**. Those two statements are inconsistent: 3 × 3 × 3 × 3 = **81**, not
+108. 3 × 3 × 3 × 4 = 108 exactly.
+
+**Decision: the holding-cap list gains a fourth value, 15**, as the natural continuation of
+the stated sequence. The variant count is what is load-bearing here, not the specific cap
+values. `n_trials` is the denominator of the deflated-Sharpe correction — the one gate
+BUILD.md §6.1 calls the headline — and CLAUDE.md invariant 7 makes it required and
+non-defaulted precisely because understating it is the cheapest available way to launder an
+overfit result.
+
+Declaring 108 while running 81 would at least err in the *safe* direction — a larger
+`n_trials` deflates harder, so it cannot manufacture a PASS. That is exactly why it is
+worth being explicit about rejecting it anyway: `n_trials` is not a conservatism dial, it
+is a count of what was searched. Once it is allowed to be approximately true in the
+harmless direction, there is no principled place to stop, and the gate's denominator stops
+being a fact about the run.
+
+The alternative — keep {3,5,10} and correct the count to 81 — was available and rejected.
+It would leave the demo's headline count differing from the spec's, for no gain: nothing
+about the strategy or the audit depends on which four caps are used, while a great deal
+depends on `n_trials` being literally true.
+
+Ratified by Sheshakanth. It was carried as a stated assumption in
+`examples/rsi2_nifty/README.md` and `strategy.py` while it remained his call; those now
+point here instead. Recorded rather than silently applied because a spec that quietly
+edits itself to match its implementation is not a spec.
+
+---
 
 **This artifact is the portfolio piece.** Not the code — the verdict. A one-page report
 that says "here is a strategy that looks like it makes 22% CAGR, here is why it doesn't,

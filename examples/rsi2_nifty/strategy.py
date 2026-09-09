@@ -15,12 +15,12 @@ Long-only, daily, one RSI variant per grid point:
 
 3 x 3 x 3 x 4 = 108 variants.
 
-NOTE on holding_cap: BUILD.md's M7 section lists "holding cap {3,5,10}" -- three
+NOTE on holding_cap: BUILD.md originally listed "holding cap {3,5,10}" -- three
 values -- while also stating the grid has 108 variants. 3x3x3x3 = 81, not 108;
-3x3x3x4 = 108 exactly. This module adopts a fourth holding-cap value, 15, as the
-natural extension of the stated sequence, to make n_trials=108 literally true
-rather than silently reporting 81 while claiming 108. This is a stated assumption,
-not a silent correction, and it is flagged again in the session report.
+3x3x3x4 = 108 exactly. The fourth value, 15, is now part of the spec: see BUILD.md
+section 9, "Spec correction -- the fourth holding-cap value", ratified rather than
+assumed. n_trials=108 is therefore literally true, which is what CLAUDE.md
+invariant 7 and the deflated-Sharpe gate both require of it.
 
 Position sizing is likewise not specified beyond "long-only": each symbol gets an
 equal weight of 1/N_universe while a position is open, 0 otherwise. No pyramiding
@@ -71,8 +71,8 @@ __all__ = [
 RSI_PERIODS: tuple[int, ...] = (2, 3, 4)
 ENTRY_THRESHOLDS: tuple[int, ...] = (5, 10, 15)
 EXIT_THRESHOLDS: tuple[int, ...] = (50, 60, 70)
-#: Fourth value (15) added beyond BUILD.md's literal {3,5,10} to make the grid
-#: 3*3*3*4=108 as required. See module docstring.
+#: Four values, per BUILD.md section 9's spec correction: {3,5,10} would make the
+#: grid 81, not the 108 the spec requires. See module docstring.
 HOLDING_CAPS: tuple[int, ...] = (3, 5, 10, 15)
 
 
