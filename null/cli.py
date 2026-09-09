@@ -41,6 +41,7 @@ from null.contracts import (
     Verdict,
 )
 from null.costs.india_equity import IndiaEquityCostModel
+from null.costs.robustness import load_rate_robustness
 from null.data.ohlcv import DEFAULT_CACHE as OHLCV_CACHE
 from null.benchmark.tri import load_nifty50_tri
 from null.data.ohlcv import load_bars
@@ -162,10 +163,19 @@ def build_evidence(
     bars: tuple[Bar, ...],
     benchmark_bars: tuple[Bar, ...],
     costs: IndiaEquityCostModel,
+    cost_robustness_path: Path | None = None,
 ) -> tuple[Evidence, dict[str, object]]:
     """Assemble the Evidence the gates consume, plus the report context.
 
     Only reached when leakage is clean; the caller short-circuits otherwise.
+
+    ``cost_robustness_path`` is an optional cost-rate sensitivity sweep. When the
+    charge rates are unverified, the limitations band otherwise has to say only
+    that -- which warns the reader without telling them which conclusions the
+    unverified rates actually put at risk. A sweep turns that into a measured
+    statement. It is read, never trusted: the finding is recomputed from the
+    file's raw columns and a malformed file raises rather than degrading to a
+    reassuring default.
     """
     leakage = audit_leakage(run, bars)
     bench = benchmark_check(
@@ -263,6 +273,10 @@ def build_evidence(
         "mtrl_rationale": mtrl.rationale,
         "_dsr": dsr,
     }
+    if cost_robustness_path is not None:
+        context["cost_rate_robustness"] = load_rate_robustness(
+            cost_robustness_path, n_variants=run.n_trials
+        ).sentence
     return evidence, context
 
 
@@ -398,7 +412,15 @@ def run_audit_command(args: argparse.Namespace) -> int:
         return EXIT_REJECT
 
     try:
-        evidence, context = build_evidence(run, bars, benchmark_bars, costs)
+        evidence, context = build_evidence(
+            run,
+            bars,
+            benchmark_bars,
+            costs,
+            cost_robustness_path=(
+                Path(args.cost_robustness) if args.cost_robustness else None
+            ),
+        )
     except ValueError as exc:
         raise InputError(str(exc)) from exc
     dsr = context.pop("_dsr")
@@ -458,6 +480,17 @@ def build_parser() -> argparse.ArgumentParser:
             "column plus one column per trial param_hash), for when run.json "
             "declares its trials without embedding full Series -- restores real "
             "PBO evidence instead of NOT_COMPUTABLE"
+        ),
+    )
+    audit.add_argument(
+        "--cost-robustness",
+        default=None,
+        help=(
+            "cost-rate sensitivity sweep CSV (see null/costs/robustness.py for the "
+            "required columns). Charge rates that have never been reconciled against "
+            "a broker contract note make every cost LEVEL unverified; a sweep "
+            "establishes which CONCLUSIONS survive that, and the limitations band "
+            "reports the measured result instead of a blanket disclaimer"
         ),
     )
     audit.add_argument("--out", default=".", help="output directory")

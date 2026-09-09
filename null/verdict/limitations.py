@@ -39,16 +39,59 @@ def register(detector: Detector) -> Detector:
 def _unverified_cost_rates(
     evidence: Evidence, context: dict[str, object]
 ) -> Limitation | None:
+    """Unverified rates, stated precisely rather than as a blanket disclaimer.
+
+    The old wording said every cost figure was "indicative only". That is true of
+    cost LEVELS and useless as a disclosure: it warns the reader that something
+    might be wrong without telling them which conclusions actually depend on it, so
+    a reader either ignores the whole report or ignores the whole band. Neither is
+    what a disclosure is for.
+
+    What the rates being unverified does and does not touch is separable:
+
+      * a rupee cost, a cost-drag percentage, a net Sharpe LEVEL -- carries the
+        rate error directly, and nothing here fixes that;
+      * a RANKING of two variants priced under the same rates -- survives a rate
+        error unless the ranking is thin relative to it, which is a measurable
+        question, not a rhetorical one.
+
+    So the band states the provenance, separates those two, and then reports
+    whether the sensitivity was actually measured for this run. Severity stays
+    "blocking" in both branches: a measured sweep shows which conclusions survive
+    the unverified rates, it does not make the rates verified, and the levels on
+    the report are still unconfirmed either way.
+    """
     if context.get("rates_are_verified", False):
         return None
+
+    provenance = (
+        "Charge rates are taken from the published Indian equity charge stack and "
+        "have NOT been reconciled against a live broker contract note "
+        "(configs/costs_india_equity.yaml carries _verified_on: UNVERIFIED). Cost "
+        "LEVELS on this report -- every rupee figure, every cost-drag percentage, "
+        "every net Sharpe -- carry that error directly. A RANKING between variants "
+        "priced under the same rates does not automatically, but whether a "
+        "particular ranking survives a plausible rate error is a measurable "
+        "question rather than an assumption. "
+    )
+
+    measured = context.get("cost_rate_robustness")
+    if isinstance(measured, str) and measured.strip():
+        return Limitation(
+            key="unverified_cost_rates",
+            severity="blocking",
+            text=provenance + measured.strip(),
+        )
+
     return Limitation(
         key="unverified_cost_rates",
         severity="blocking",
         text=(
-            "Charge rates have NOT been reconciled against a live broker charge list "
-            "(configs/costs_india_equity.yaml carries _verified_on: UNVERIFIED). Every "
-            "cost figure on this report is indicative only, and rates wrong in the "
-            "optimistic direction inflate every result shown here."
+            provenance
+            + "It was NOT measured for this run: no cost-rate sensitivity sweep was "
+            "supplied, so it is not known which conclusions here would survive the "
+            "rates being wrong and which would not. Treat every cost-dependent "
+            "result as unestablished rather than merely imprecise."
         ),
     )
 
