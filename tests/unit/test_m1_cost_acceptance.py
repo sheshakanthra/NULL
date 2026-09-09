@@ -177,3 +177,97 @@ def test_config_states_its_provenance(model: IndiaEquityCostModel) -> None:
     """Stale rates silently inflate every backtest, so provenance is mandatory."""
     assert model.config.source, "config must name where its rates came from"
     assert model.config.verified_on, "config must state when they were last verified"
+
+
+# ---------------------------------------------------------------------------
+# Scaling the charge stack. These exist because the M7 cost-robustness sweep
+# (examples/rsi2_nifty/cost_robustness.py) reports a conclusion that rests
+# entirely on these two methods scaling exactly what they claim to and nothing
+# else. A sweep built on a scaler that quietly moved a second component would
+# produce a robustness result that was measuring the wrong thing.
+# ---------------------------------------------------------------------------
+
+_KW = dict(
+    symbol=SYMBOL, side=Side.BUY, quantity=400, price=PRICE,
+    segment=Segment.EQUITY_DELIVERY, sigma_daily=SIGMA_DAILY, adv_20=ADV_20,
+)
+
+
+def test_scaling_impact_k_moves_impact_and_leaves_the_spread_alone(
+    model: IndiaEquityCostModel,
+) -> None:
+    doubled = model.with_scaled_slippage("impact_k", 2.0)
+    base_charge = model.charge(**_KW)
+    scaled = doubled.charge(**_KW)
+    assert scaled.impact_bps == pytest.approx(2.0 * base_charge.impact_bps, rel=1e-9)
+    assert scaled.half_spread_bps == pytest.approx(base_charge.half_spread_bps, rel=1e-12)
+    assert base_charge.impact_bps > 0.0, "a no-op probe would make this test vacuous"
+
+
+def test_scaling_half_spread_moves_every_liquidity_tier_together(
+    model: IndiaEquityCostModel,
+) -> None:
+    """One assumption at three liquidity levels, not three components.
+
+    Scaling a single tier would change which names are penalised relative to each
+    other, which is a different question from sensitivity to the spread level.
+    """
+    halved = model.with_scaled_slippage("half_spread_bps", 0.5)
+    base_tiers = model.config.slippage.liquidity_tiers
+    scaled_tiers = halved.config.slippage.liquidity_tiers
+    assert len(scaled_tiers) == len(base_tiers) == 3
+    for base_tier, scaled_tier in zip(base_tiers, scaled_tiers):
+        assert scaled_tier.name == base_tier.name
+        assert scaled_tier.min_adv == base_tier.min_adv
+        assert scaled_tier.half_spread_bps == pytest.approx(
+            0.5 * base_tier.half_spread_bps, rel=1e-9
+        )
+    assert halved.charge(**_KW).impact_bps == pytest.approx(
+        model.charge(**_KW).impact_bps, rel=1e-12
+    ), "scaling the spread must not touch impact"
+
+
+def test_scaling_an_unknown_slippage_component_raises(
+    model: IndiaEquityCostModel,
+) -> None:
+    """Silently ignoring an unknown field would let a sweep report coverage it
+    never had."""
+    with pytest.raises(KeyError, match="impact_k"):
+        model.with_scaled_slippage("half_spread", 1.25)
+
+
+def test_scaling_never_mutates_the_model_it_was_called_on(
+    model: IndiaEquityCostModel,
+) -> None:
+    """``model`` is a module-scoped fixture -- a mutating scaler would leak across
+    every test in this file and across every case of the sweep."""
+    before_stt = model.config.segments[Segment.EQUITY_DELIVERY].stt_sell_pct
+    before_k = model.config.slippage.impact_k
+    model.with_scaled_rate(Segment.EQUITY_DELIVERY, "stt_sell_pct", 3.0)
+    model.with_scaled_slippage("impact_k", 3.0)
+    assert model.config.segments[Segment.EQUITY_DELIVERY].stt_sell_pct == before_stt
+    assert model.config.slippage.impact_k == before_k
+
+
+def test_a_scaled_rate_is_quantised_exactly_like_one_loaded_from_yaml(
+    model: IndiaEquityCostModel,
+) -> None:
+    """contracts.py invariant 2: every contract float is quantised to 12
+    significant digits on validation.
+
+    ``model_copy(update=...)`` writes straight past field validation, so a config
+    built by scaling would carry un-quantised binary-float residue that the same
+    config loaded from YAML would not -- 0.1 * 0.75 is 0.07500000000000001, not
+    0.075. Immaterial to a Sharpe, fatal to "same input -> byte-identical output"
+    if it ever reached an artifact. This is the test that fails if the revalidating
+    copy is swapped back for a plain model_copy.
+    """
+    base_rate = model.config.segments[Segment.EQUITY_DELIVERY].stt_buy_pct
+    assert base_rate == 0.1
+    raw_product = base_rate * 0.75
+    assert raw_product != 0.075, (
+        "this test depends on 0.1 * 0.75 being inexact in binary floating point; "
+        "if that stopped being true the test has gone vacuous"
+    )
+    scaled = model.with_scaled_rate(Segment.EQUITY_DELIVERY, "stt_buy_pct", 0.75)
+    assert scaled.config.segments[Segment.EQUITY_DELIVERY].stt_buy_pct == 0.075

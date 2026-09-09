@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import yaml
 
@@ -84,6 +84,22 @@ class CostConfig(NullModel):
         )
 
 
+_M = TypeVar("_M", bound=NullModel)
+
+
+def _revalidate(model: _M, update: dict[str, Any]) -> _M:
+    """``model_copy(update=...)`` with the validators put back.
+
+    ``model_copy`` writes straight past field validation, which on a NullModel means
+    past the 12-significant-digit float quantisation that contracts.py exists to
+    enforce (invariant 2: one differing low bit across BLAS builds would flip
+    evidence_hash). A scaled rate is exactly where that bites -- 0.1 * 0.75 is
+    0.07500000000000001 in binary floating point, and a config built by scaling
+    must be indistinguishable from the same config loaded from YAML.
+    """
+    return type(model).model_validate({**model.model_dump(), **update})
+
+
 class RoundTripCost(NullModel):
     """A buy and the matching sell, costed together."""
 
@@ -127,9 +143,43 @@ class IndiaEquityCostModel:
         rates = self.config.segments[segment]
         if field not in type(rates).model_fields:
             raise KeyError(f"{field!r} is not a rate on {segment.value}")
-        updated = rates.model_copy(update={field: getattr(rates, field) * factor})
+        updated = _revalidate(rates, {field: getattr(rates, field) * factor})
         segments = {**self.config.segments, segment: updated}
-        return IndiaEquityCostModel(self.config.model_copy(update={"segments": segments}))
+        return IndiaEquityCostModel(
+            _revalidate(self.config, {"segments": segments})
+        )
+
+    def with_scaled_slippage(self, field: str, factor: float) -> IndiaEquityCostModel:
+        """A copy with one slippage component scaled. Companion to ``with_scaled_rate``.
+
+        Slippage is a charge component like any other, and on a high-turnover
+        strategy it is usually the largest one, so a robustness sweep that varied
+        only the statutory rates would be sweeping the small half of the stack.
+
+        ``field`` is ``"impact_k"`` or ``"half_spread_bps"``. The latter scales every
+        liquidity tier by the same factor: the tiers are one assumption expressed at
+        three liquidity levels, not three independent components. Scaling a single
+        tier would change which names are penalised *relative to each other*, which
+        is a different question from how sensitive the result is to the spread
+        assumption itself.
+        """
+        slippage = self.config.slippage
+        if field == "impact_k":
+            updated = _revalidate(slippage, {"impact_k": slippage.impact_k * factor})
+        elif field == "half_spread_bps":
+            tiers = tuple(
+                _revalidate(tier, {"half_spread_bps": tier.half_spread_bps * factor})
+                for tier in slippage.liquidity_tiers
+            )
+            updated = _revalidate(slippage, {"liquidity_tiers": tiers})
+        else:
+            raise KeyError(
+                f"{field!r} is not a scalable slippage component; expected "
+                "'impact_k' or 'half_spread_bps'"
+            )
+        return IndiaEquityCostModel(
+            _revalidate(self.config, {"slippage": updated})
+        )
 
     def charge(
         self,
