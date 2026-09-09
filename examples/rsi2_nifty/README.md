@@ -3,8 +3,12 @@
 **Status: prepped, not yet audited.** Everything except the benchmark comparison
 is built and run against the real, committed, corporate-action-adjusted OHLCV
 cache. There is no committed NIFTY 50 TRI series yet (see `docs/data_sources.md`),
-so `null audit` cannot run to completion until one lands. One statistic needs no
-benchmark at all — deflated Sharpe — and it is computed below.
+so `null audit` cannot run to completion until one lands.
+
+Two results need no benchmark at all and are computed below: the **deflated
+Sharpe**, and a **±25% sweep of every charge component** that establishes which
+cost-driven conclusions here survive rates that were never reconciled against a
+broker contract note — and which do not. One of them did not.
 
 ## What is here
 
@@ -15,6 +19,8 @@ benchmark at all — deflated Sharpe — and it is computed below.
 | `run.json` | The audit input. `n_trials=108` declared honestly, one `TrialRecord` per variant carrying its Sharpe, weights for the best (highest net Sharpe) variant. **Per-trial return series are NOT embedded** — see the split, below. |
 | `run.trials.parquet` | Sibling to `run.json` by naming convention (`<stem>.trials.parquet`): the 108 variants' real net-return series, wide format (`date` column plus one column per `param_hash`). Same data as would otherwise sit inside `run.json`. |
 | `grid_report.csv` | All 108 variants: parameters, gross and net Sharpe, position-change count. Auditable by eye. |
+| `cost_robustness.py` | Scales every charge component by +/-25% and re-runs the whole grid against each scaled model. 25 full runs. |
+| `cost_robustness.csv` | The result of that sweep, one row per case. What the limitations band cites. |
 | `sensitivity.json` | The `SensitivityResult` built directly from the same grid — see "On the sensitivity surface" below. |
 
 ## The run.json / run.trials.parquet split
@@ -76,13 +82,106 @@ gross 0.952, net 0.422, 20,888 position changes across the 50-name universe.
 
 **Best by gross Sharpe:** period=2, entry=15, exit=70, holding_cap=3 →
 gross 0.967, **net −0.027**. Selecting on the number a naive backtest would show
-you picks a strategy that loses money net of cost. This is not a contrived
-example — it is the actual best-by-gross variant in this actual grid.
+you picks a different variant, and one that ranks **69th of 108** once costs are
+charged.
+
+At the configured rates that variant also loses money outright. **Do not lean on
+that second fact** — −0.027 is 0.027 from flipping, and the rate sweep below flips
+it. The rank is the part that holds.
 
 **Cost erosion at the best point is 0.531 Sharpe** — more than the entire net
 Sharpe of the variant that survives it. RSI(2) mean-reversion is inherently
 high-turnover, and BUILD.md's cost model — the DP charge in particular — is doing
 real, visible work before NULL's statistical gates ever run.
+
+## Are the charge rates right? No — and here is exactly what that voids
+
+The rates in `configs/costs_india_equity.yaml` were written from the published
+Indian equity charge stack and have **never been reconciled against a live broker
+contract note**. That is not going to change; sourcing one would mean opening a
+position purely to generate a receipt.
+
+The lazy response is to stamp "indicative only" on every cost figure. That warns a
+reader without telling them what it voids, so they either discard the whole report
+or ignore the whole warning. Neither is a disclosure.
+
+The alternative is to measure. Every charge component was scaled independently by
+±25% and the full 108-variant grid re-run against each scaled model — 25 full runs
+(`cost_robustness.py` → `cost_robustness.csv`), including a joint case with every
+component moved at once, and both brokerage fields as a negative control (they are
+provably inert at a zero configured brokerage, and came back with a delta of
+exactly zero, which is how the sweep demonstrates it is perturbing the config
+rather than something of its own).
+
+### The headline claim did not survive
+
+**"The best-by-gross variant loses money net of costs" fails in 4 of 25 cases.**
+
+| case | naive pick's net Sharpe |
+|---|---|
+| `stt_buy_pct` @ 0.75× | **+0.055** |
+| `stt_sell_pct` @ 0.75× | **+0.055** |
+| `half_spread_bps` @ 0.75× | **+0.014** |
+| every component @ 0.75× | **+0.222** |
+
+All four are in the same direction: costs *lower* than modelled. In hindsight this
+is not surprising and should have been anticipated before the number was ever
+written down. It is a **sign test**, and the number it tests sits 0.027 from zero.
+STT at 0.10% on both legs is worth ~0.08 Sharpe on this turnover all by itself, so
+a 25% error in one statutory rate is more than enough to cross it. The claim was
+never robust. Nothing about the strategy changed — the sweep only made visible
+what the single number had been hiding.
+
+### What did survive, in all 25 cases
+
+| measure | across the whole ±25% range |
+|---|---|
+| Was the best-by-gross variant ever also the best-by-net variant? | **Never — 0 of 25** |
+| Rank of the gross pick on the net-ranked grid | **24th to 93rd of 108** |
+| Net Sharpe given up by selecting on gross rather than net | **0.332 to 0.615** |
+
+Even at the corner — every component 25% cheaper *simultaneously*, a larger error
+than any single published rate is plausibly wrong by — selecting on gross still
+lands 24th of 108 and gives up 0.332 Sharpe.
+
+So the demo's opening is **not** "the naive pick loses money". It is:
+
+> Selecting on the gross Sharpe a normal backtester puts in front of you picks a
+> variant that ranks **69th of 108** once costs are charged, giving up **0.45
+> Sharpe** against selecting on net. That holds across every rate error tested.
+> Whether the naive pick's net Sharpe lands fractionally above or below zero does
+> not hold, and is not the point.
+
+### What the limitations band now says
+
+`null/verdict/limitations.py` no longer says the cost numbers are "indicative
+only". It separates two things the unverified rates affect differently — cost
+**levels**, which carry the rate error directly, and cost-driven **rankings**,
+which may or may not — and then reports whether the sensitivity was actually
+measured for this run. The sentence is derived from `cost_robustness.csv` by
+`null/costs/robustness.py`, not hand-written, so a report cannot claim a
+robustness the sweep does not support:
+
+```
+null audit examples/rsi2_nifty/run.json   --trials-parquet examples/rsi2_nifty/run.trials.parquet   --cost-robustness examples/rsi2_nifty/cost_robustness.csv   --benchmark <tri.parquet> ...
+```
+
+Without `--cost-robustness` the band states, conservatively, that rate sensitivity
+was **not** measured and that cost-dependent conclusions are unestablished rather
+than merely imprecise. An absent sweep is not a passing one.
+
+**On the sweep's determinism.** Two cases — the baseline and `stt_buy_pct@0.75`,
+the one that broke the finding — were independently re-run and compared
+field-by-field against the committed CSV; both are identical. That is a spot
+check, not a proof over all 25: re-running the whole sweep is ~45 minutes and it
+has not been done twice. The per-case grid it rests on is the same `run_grid`
+already covered by byte-identical determinism tests.
+
+The reader refuses a malformed sweep rather than degrading to a reassuring
+default, and it **recomputes** each case's verdict from the raw columns instead of
+trusting the file's own `inversion_holds` column — if the two disagree it raises,
+because a sweep that mislabels itself would otherwise launder that straight onto a
+report.
 
 ## Deflated Sharpe — needs no benchmark, computed now
 
@@ -152,3 +251,9 @@ particularly next to a deflated Sharpe sitting at 0.516.
   those now would mean either fabricating a benchmark series or running the audit
   on an obviously incomplete `Evidence` object and calling it a result. Neither is
   honest. This step is separate and waits on the TRI cache.
+- **The charge rates are not verified and will not be.** They are read from the
+  published charge stack, never reconciled against a contract note. This does not
+  make every number here unreliable in general, and the report no longer says it
+  does: every cost **level** carries that error directly, while the ranking result
+  above was measured across a ±25% error band on every component and survives it.
+  The one claim that did not survive is named, above, rather than absorbed.

@@ -58,6 +58,35 @@ actually wrote a file, and then failed on all four matrix combinations at once.
 Locally it had passed 352 tests throughout, because `pyarrow` happened to be
 installed as a transitive dependency of something else.
 
+## 5. A headline claim that was a coin flip standing on a boundary
+
+Not a code defect — a **claim** defect, which is why it belongs here rather than in
+a changelog. The M7 README's opening was: *selecting on gross Sharpe picks a
+variant that loses money net of costs.* True at the configured rates. The
+best-by-gross variant nets **−0.027**.
+
+That number is a **sign test**, and it sits 0.027 from flipping. Scaling each
+charge component by ±25% — a plausible error band for rates read off a published
+schedule and never reconciled against a contract note — flips it in **4 of 25
+cases**, every one of them in the direction of costs being *lower* than modelled.
+STT alone, at 0.10% on both legs, is worth about 0.08 Sharpe on this turnover.
+
+Nothing about the strategy changed. Nothing in the codebase was wrong. The claim
+was simply never robust, and no test could have said so, because the claim was not
+in the codebase to be tested — it was in a README, in prose, computed once at one
+set of rates.
+
+The same phenomenon stated so it does not balance on a boundary: the gross pick
+**ranks 24th-to-93rd of 108** on the net-ranked grid across every case in the
+sweep, was **never once** the best-by-net variant, and gives up **0.332 to 0.615**
+net Sharpe. That is a bigger claim than the one it replaces, and it holds.
+
+The fix was not to soften the README. It was to build the sweep
+(`examples/rsi2_nifty/cost_robustness.py`), commit its output as an artifact, and
+make `null/verdict/limitations.py` derive its cost-rate disclosure from that file
+rather than from prose — so the next claim of this shape has to be measured before
+it can be printed.
+
 ---
 
 ## The pattern
@@ -83,10 +112,20 @@ degenerate, treat it as absent.** A skip is not a weaker pass; it is a hole with
 label on it. Item 1 is a sharper version of the same idea — the test ran, but its
 outcome was decided by something that carried no information.
 
+**Item 5 extends the rule past the test suite.** It was never covered by a test,
+because it lived in prose rather than in code — but it is subject to the same
+question the other four are: *could this have come out differently?* A finding
+sitting 0.027 from its own sign boundary could, and one that could was never
+established. The generalisation: **a result that has not been perturbed has not
+been tested**, and it does not matter whether it lives in a test file or a README.
+Perturbing it is cheap. Not perturbing it is how a coin flip gets printed as a
+conclusion.
+
 ## Why this belongs in the report rather than a changelog
 
 NULL exists to say that a number produced by an unaudited process should not be
-believed. Four defects, every one hidden behind a passing test, are the strongest
-available evidence for that claim — and the least comfortable. A tool that makes
+believed. Four defects hidden behind passing tests, plus a headline claim that
+turned out to rest on a boundary, are the strongest available evidence for that
+claim — and the least comfortable. A tool that makes
 this argument while concealing its own history of exactly this failure would be
 making the argument dishonestly.
