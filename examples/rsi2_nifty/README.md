@@ -6,9 +6,9 @@ cache. There is no committed NIFTY 50 TRI series yet (see `docs/data_sources.md`
 so `null audit` cannot run to completion until one lands.
 
 Two results need no benchmark at all and are computed below: the **deflated
-Sharpe**, and a **±25% sweep of every charge component** that establishes which
-cost-driven conclusions here survive rates that were never reconciled against a
-broker contract note — and which do not. One of them did not.
+Sharpe**, and a **±25% sweep of every charge component** establishing that the
+cost finding here does not depend on charge rates that were never reconciled
+against a broker contract note.
 
 ## What is here
 
@@ -50,17 +50,23 @@ To audit with full PBO evidence once TRI lands:
 ```
 null audit examples/rsi2_nifty/run.json \
   --trials-parquet examples/rsi2_nifty/run.trials.parquet \
+  --cost-robustness examples/rsi2_nifty/cost_robustness.csv \
   --benchmark <tri.parquet> ...
 ```
 
-## A stated assumption: the fourth holding-cap value
+## The fourth holding-cap value — settled
 
-BUILD.md's M7 section lists the grid as `holding cap {3,5,10}` — three values —
-while also stating the grid has 108 variants. `3 x 3 x 3 x 3 = 81`, not 108;
-`3 x 3 x 3 x 4 = 108` exactly. `strategy.py` adds a fourth holding-cap value, 15,
-as the natural continuation of the stated sequence, so that `n_trials=108` is
-literally true rather than quietly reporting 81 while claiming 108. **This is an
-assumption, not a correction on Sheshakanth's authority, and needs confirmation.**
+BUILD.md's M7 section originally listed the grid as `holding cap {3,5,10}` — three
+values — while also stating the grid has 108 variants. `3 x 3 x 3 x 3 = 81`, not
+108; `3 x 3 x 3 x 4 = 108` exactly. The list now carries a fourth value, 15, so
+that `n_trials=108` is literally true rather than quietly reporting 81 while
+claiming 108.
+
+This was carried here as an open assumption while it was Sheshakanth's call to
+make. It is now **ratified and recorded in the spec** — BUILD.md section 9, *Spec
+correction — the fourth holding-cap value*, which also records why the alternative
+(keep three caps, correct the count to 81) was rejected: nothing depends on which
+caps are used, and a great deal depends on `n_trials` being true.
 
 ## The raw distribution, before any NULL gate has run
 
@@ -81,13 +87,12 @@ max            0.967       0.422
 gross 0.952, net 0.422, 20,888 position changes across the 50-name universe.
 
 **Best by gross Sharpe:** period=2, entry=15, exit=70, holding_cap=3 →
-gross 0.967, **net −0.027**. Selecting on the number a naive backtest would show
+gross 0.967, net −0.027. Selecting on the number a naive backtest puts in front of
 you picks a different variant, and one that ranks **69th of 108** once costs are
-charged.
+charged — giving up **0.45 Sharpe** against selecting on net.
 
-At the configured rates that variant also loses money outright. **Do not lean on
-that second fact** — −0.027 is 0.027 from flipping, and the rate sweep below flips
-it. The rank is the part that holds.
+The rank is the claim. It is measured across a ±25% error band on every charge
+component below, and it holds throughout.
 
 **Cost erosion at the best point is 0.531 Sharpe** — more than the entire net
 Sharpe of the variant that survives it. RSI(2) mean-reversion is inherently
@@ -113,28 +118,9 @@ provably inert at a zero configured brokerage, and came back with a delta of
 exactly zero, which is how the sweep demonstrates it is perturbing the config
 rather than something of its own).
 
-### The headline claim did not survive
+### The result
 
-**"The best-by-gross variant loses money net of costs" fails in 4 of 25 cases.**
-
-| case | naive pick's net Sharpe |
-|---|---|
-| `stt_buy_pct` @ 0.75× | **+0.055** |
-| `stt_sell_pct` @ 0.75× | **+0.055** |
-| `half_spread_bps` @ 0.75× | **+0.014** |
-| every component @ 0.75× | **+0.222** |
-
-All four are in the same direction: costs *lower* than modelled. In hindsight this
-is not surprising and should have been anticipated before the number was ever
-written down. It is a **sign test**, and the number it tests sits 0.027 from zero.
-STT at 0.10% on both legs is worth ~0.08 Sharpe on this turnover all by itself, so
-a 25% error in one statutory rate is more than enough to cross it. The claim was
-never robust. Nothing about the strategy changed — the sweep only made visible
-what the single number had been hiding.
-
-### What did survive, in all 25 cases
-
-| measure | across the whole ±25% range |
+| measure | across the whole ±25% range, all 25 cases |
 |---|---|
 | Was the best-by-gross variant ever also the best-by-net variant? | **Never — 0 of 25** |
 | Rank of the gross pick on the net-ranked grid | **24th to 93rd of 108** |
@@ -142,15 +128,22 @@ what the single number had been hiding.
 
 Even at the corner — every component 25% cheaper *simultaneously*, a larger error
 than any single published rate is plausibly wrong by — selecting on gross still
-lands 24th of 108 and gives up 0.332 Sharpe.
+lands **24th of 108** and gives up **0.332 Sharpe**. In the other direction it
+reaches 93rd of 108 and 0.615.
 
-So the demo's opening is **not** "the naive pick loses money". It is:
+So the demo opens with this, and only this:
 
 > Selecting on the gross Sharpe a normal backtester puts in front of you picks a
 > variant that ranks **69th of 108** once costs are charged, giving up **0.45
-> Sharpe** against selecting on net. That holds across every rate error tested.
-> Whether the naive pick's net Sharpe lands fractionally above or below zero does
-> not hold, and is not the point.
+> Sharpe** against selecting on net. Every charge component was varied by ±25%
+> and the result holds across all of it.
+
+The sweep also killed an earlier, weaker version of the same claim — that the
+gross pick loses money outright. That one is recorded in
+[`docs/findings.md`](../../docs/findings.md) as item 5, a claim that failed its own
+test, along with why it failed and what replaced it. It is **deliberately not
+restated here**: it is a strictly weaker form of the finding above, and stating
+both would only invite the more dramatic number to be the one that gets quoted.
 
 ### What the limitations band now says
 
@@ -163,19 +156,37 @@ measured for this run. The sentence is derived from `cost_robustness.csv` by
 robustness the sweep does not support:
 
 ```
-null audit examples/rsi2_nifty/run.json   --trials-parquet examples/rsi2_nifty/run.trials.parquet   --cost-robustness examples/rsi2_nifty/cost_robustness.csv   --benchmark <tri.parquet> ...
+null audit examples/rsi2_nifty/run.json \
+  --trials-parquet examples/rsi2_nifty/run.trials.parquet \
+  --cost-robustness examples/rsi2_nifty/cost_robustness.csv \
+  --benchmark <tri.parquet> ...
 ```
 
 Without `--cost-robustness` the band states, conservatively, that rate sensitivity
 was **not** measured and that cost-dependent conclusions are unestablished rather
 than merely imprecise. An absent sweep is not a passing one.
 
-**On the sweep's determinism.** Two cases — the baseline and `stt_buy_pct@0.75`,
-the one that broke the finding — were independently re-run and compared
-field-by-field against the committed CSV; both are identical. That is a spot
-check, not a proof over all 25: re-running the whole sweep is ~45 minutes and it
-has not been done twice. The per-case grid it rests on is the same `run_grid`
-already covered by byte-identical determinism tests.
+**On the sweep's determinism.** All 25 cases were independently re-run and
+compared field-by-field against the committed CSV. **Every one reproduced
+exactly** — all 16 fields, to the CSV's full 6-decimal resolution.
+
+That check is not a one-off; it is a mode of the script, so anyone who clones this
+can repeat it:
+
+```
+python examples/rsi2_nifty/cost_robustness.py --verify
+```
+
+It re-runs the sweep, compares against the committed CSV rather than overwriting
+it, and exits non-zero on any mismatch. The verifier is itself tested against
+planted discrepancies — a 1e-6 drift in a float, a changed integer rank, a missing
+case, an extra case, and an absent CSV — because a verifier that cannot fail would
+make the whole check theatre
+(`tests/examples/test_cost_robustness_sweep.py`).
+
+Why this and not a spot check: the claim above is *derived from that file*. A
+sweep whose numbers move between runs would not be weak evidence for it, it would
+be no evidence at all.
 
 The reader refuses a malformed sweep rather than degrading to a reassuring
 default, and it **recomputes** each case's verdict from the raw columns instead of
@@ -255,5 +266,5 @@ particularly next to a deflated Sharpe sitting at 0.516.
   published charge stack, never reconciled against a contract note. This does not
   make every number here unreliable in general, and the report no longer says it
   does: every cost **level** carries that error directly, while the ranking result
-  above was measured across a ±25% error band on every component and survives it.
-  The one claim that did not survive is named, above, rather than absorbed.
+  above was measured across a ±25% error band on every component and survives it
+  in all 25 cases.

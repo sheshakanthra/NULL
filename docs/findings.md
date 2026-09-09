@@ -68,8 +68,20 @@ best-by-gross variant nets **−0.027**.
 That number is a **sign test**, and it sits 0.027 from flipping. Scaling each
 charge component by ±25% — a plausible error band for rates read off a published
 schedule and never reconciled against a contract note — flips it in **4 of 25
-cases**, every one of them in the direction of costs being *lower* than modelled.
-STT alone, at 0.10% on both legs, is worth about 0.08 Sharpe on this turnover.
+cases**, every one in the direction of costs being *lower* than modelled:
+
+| case | the naive pick's net Sharpe |
+|---|---|
+| `stt_buy_pct` @ 0.75× | **+0.055** |
+| `stt_sell_pct` @ 0.75× | **+0.055** |
+| `half_spread_bps` @ 0.75× | **+0.014** |
+| every component @ 0.75× | **+0.222** |
+
+The margin the claim stood on was **0.027**. A 25% move in one STT leg is worth
+**0.081** of net Sharpe on this turnover — three times that margin, from a single
+statutory rate. Half-spread is worth 0.040, impact 0.021. Only the DP charge
+(0.006) and the smaller statutory fees move the number by less than the margin
+itself. Most of the charge stack could flip this claim single-handedly.
 
 Nothing about the strategy changed. Nothing in the codebase was wrong. The claim
 was simply never robust, and no test could have said so, because the claim was not
@@ -86,6 +98,12 @@ The fix was not to soften the README. It was to build the sweep
 make `null/verdict/limitations.py` derive its cost-rate disclosure from that file
 rather than from prose — so the next claim of this shape has to be measured before
 it can be printed.
+
+**The README states only the replacement, not both.** The sign result is a
+strictly weaker form of the same phenomenon, and a document carrying both invites
+the more dramatic number to be the one that gets quoted. This entry is where the
+sign result lives, and it is worth more here — as a claim that failed its own
+test — than it ever was as a finding.
 
 ---
 
@@ -121,11 +139,59 @@ been tested**, and it does not matter whether it lives in a test file or a READM
 Perturbing it is cheap. Not perturbing it is how a coin flip gets printed as a
 conclusion.
 
+## The other pattern: controls that prove the instrument is connected
+
+Every defect above was found because something that *should* have been able to
+fail was made able to fail. The generalisation of that is a **negative control**:
+alongside the check, run an input whose correct outcome is known in advance, and
+confirm the apparatus produces it. It has now shown up in this repo in three
+distinct shapes, and naming them is worth more than the individual cases.
+
+**1. Plant the violation.** The invariant greps (`tests/unit/test_no_llm.py`,
+`tests/unit/test_source_invariants.py`) scan `null/` for LLM calls, network calls,
+credentials and wall-clock. A grep over a clean tree passes whether or not the
+pattern is right, whether or not the path is right, whether or not the scanner
+runs at all. So each scan is paired with a control that writes the violation into
+a temporary directory and asserts it is caught. *A guard test that has never been
+seen to fail is not a guard.*
+
+**2. Feed it noise.** The statistical gates (`test_deflated_sharpe.py`,
+`test_pbo.py`, `test_reality_check.py`, `test_walkforward.py`,
+`test_bootstrap.py`) each get an input with no edge in it and must reject. A gate
+that passes real strategies proves nothing on its own — the null hypothesis has to
+be shown to actually get rejected, or the gate is decoration.
+
+**3. Perturb something inert.** New, from the cost-rate sweep. The sweep varies
+every charge component by ±25%, and two of them — `brokerage_pct` and
+`brokerage_per_order_cap` — are *provably* inert on this config: brokerage is
+configured at zero, the model short-circuits to `0.0` before the per-order cap's
+`min()` is reached, and GST is levied on a brokerage that is zero either way. Both
+were swept anyway, and both returned a delta of **exactly zero**.
+
+That zero is the load-bearing part. A sweep is a machine for producing
+reassurance: it emits 25 rows of plausible numbers whether or not it is connected
+to anything. A typo'd field name, a scaler writing to a copy nobody reads, a
+`model_copy` silently dropping an update — each would yield a full CSV of cases
+all agreeing the finding holds, and none of them would look wrong. Two components
+that *cannot* move the number, confirmed not to move it, are what distinguish
+"this sweep perturbed the real cost config" from "this sweep perturbed something
+of its own and reported on that." The paired assertion — that every *other*
+component moved the charge, in the correct direction, on the correct leg
+(`tests/examples/test_cost_robustness_sweep.py`) — closes the other half.
+
+The shapes differ; the question behind them is identical: **if this apparatus were
+disconnected, would the output look any different?** If the answer is no, the
+output is not evidence, however many rows it has.
+
+---
+
 ## Why this belongs in the report rather than a changelog
 
 NULL exists to say that a number produced by an unaudited process should not be
 believed. Four defects hidden behind passing tests, plus a headline claim that
 turned out to rest on a boundary, are the strongest available evidence for that
-claim — and the least comfortable. A tool that makes
+claim — and the least comfortable. The controls above are the other half of it:
+not a record of what went wrong, but of what was done to make going wrong
+visible. A tool that makes
 this argument while concealing its own history of exactly this failure would be
 making the argument dishonestly.
