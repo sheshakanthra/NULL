@@ -31,8 +31,18 @@ edge:
 
 Those are reported whatever questions 1 and 2 do. If the sign test breaks and the
 rank does not, that is not a rescue of the original claim -- it is a different and
-better-founded claim, and the README states it as such rather than quietly
-substituting one for the other.
+better-founded claim.
+
+WHAT ACTUALLY HAPPENED, on the committed run: question 1 FAILED in 4 of 25 cases
+(both STT legs and the half-spread at 0.75x, and the joint 0.75x corner), all in
+the direction of costs being lower than modelled. Question 2 held in all 25.
+Questions 3 and 4 held comfortably: rank 24-93 of 108, giving up 0.332-0.615 net
+Sharpe, and the gross pick was never once the net pick.
+
+The README therefore states the rank and NOT the sign result -- the latter is a
+strictly weaker form of the same phenomenon, and carrying both would invite the
+more dramatic number to be the one quoted. The sign result is written up in
+docs/findings.md as item 5, a claim that failed its own test.
 
 Two design notes.
 
@@ -241,6 +251,68 @@ def run_case(case: tuple[str, float]) -> CaseResult:
     return summarise(component, factor, results)
 
 
+def _row_of(result: CaseResult) -> dict[str, str]:
+    """One CSV row's worth of a result, formatted exactly as the writer formats it.
+
+    Shared by the writer and the verifier so a comparison can never pass or fail on
+    a formatting difference that never reaches the file.
+    """
+    return {
+        key: (f"{value:.6f}" if isinstance(value, float) else str(value))
+        for key, value in asdict(result).items()
+    }
+
+
+def verify(collected: dict[tuple[str, float], CaseResult]) -> int:
+    """Compare a fresh sweep against the committed CSV, field by field.
+
+    The README's central claim is derived from that file, so its reproducibility is
+    load-bearing rather than housekeeping. A case that does not reproduce means the
+    grid, the cost model or the scaling carries a source of variation, and every
+    number downstream is then unsupported -- a stop, not a footnote.
+    """
+    if not REPORT_OUT.exists():
+        print(f"No committed sweep at {REPORT_OUT}; nothing to verify against.")
+        return 2
+    with REPORT_OUT.open(encoding="utf-8", newline="") as handle:
+        committed = {
+            (row["component"], float(row["factor"])): row
+            for row in csv.DictReader(handle)
+        }
+
+    mismatches: list[str] = []
+    for case, result in sorted(collected.items()):
+        want = committed.get(case)
+        if want is None:
+            mismatches.append(f"{case[0]}@{case[1]:.2f}: absent from the committed CSV")
+            continue
+        for key, value in _row_of(result).items():
+            if want.get(key) != value:
+                mismatches.append(
+                    f"{case[0]}@{case[1]:.2f} {key}: re-run={value!r} "
+                    f"committed={want.get(key)!r}"
+                )
+    for case in sorted(set(committed) - set(collected)):
+        mismatches.append(f"{case[0]}@{case[1]:.2f}: in the CSV but not re-run")
+
+    print()
+    print("=" * 72)
+    if mismatches:
+        print(f"DETERMINISM FAILED -- {len(mismatches)} mismatch(es). This is a P0:")
+        for line in mismatches[:40]:
+            print(f"  {line}")
+        if len(mismatches) > 40:
+            print(f"  ... and {len(mismatches) - 40} more")
+        print("=" * 72)
+        return 1
+    print(
+        f"DETERMINISM OK -- all {len(collected)} cases reproduced field-for-field "
+        "against the committed CSV."
+    )
+    print("=" * 72)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="cost-rate robustness sweep")
     parser.add_argument(
@@ -248,6 +320,14 @@ def main() -> int:
         type=int,
         default=3,
         help="parallel grid runs; memory-bound, not CPU-bound (default 3)",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help=(
+            "re-run every case and compare against the committed CSV instead of "
+            "rewriting it; exits non-zero on any mismatch"
+        ),
     )
     args = parser.parse_args()
 
@@ -278,6 +358,9 @@ def main() -> int:
                 flush=True,
             )
 
+    if args.verify:
+        return verify(collected)
+
     # Fixed case order, not completion order: the artifact must be byte-stable.
     ordered = [collected[case] for case in todo]
 
@@ -286,11 +369,7 @@ def main() -> int:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for row in ordered:
-            record: dict[str, object] = dict(asdict(row))
-            for key, value in record.items():
-                if isinstance(value, float):
-                    record[key] = f"{value:.6f}"
-            writer.writerow(record)
+            writer.writerow(_row_of(row))
     print(f"\nWrote {REPORT_OUT}")
 
     broken = [r for r in ordered if not r.inversion_holds]

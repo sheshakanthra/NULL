@@ -222,3 +222,99 @@ def test_the_rank_breaks_ties_deterministically() -> None:
     # whichever the grid emitted first.
     expected = 1 if A.param_hash < B.param_hash else 2
     assert forward.gross_pick_rank_by_net == expected
+
+
+# ---------------------------------------------------------------------------
+# verify(): the 25-case determinism check.
+#
+# The README's central claim is derived from the committed CSV, so its
+# reproducibility is load-bearing. A verifier that cannot fail would make the
+# whole check theatre, so each of these plants a specific discrepancy and asserts
+# it is caught.
+# ---------------------------------------------------------------------------
+
+import csv as _csv
+import dataclasses
+
+from examples.rsi2_nifty import cost_robustness as _cr
+
+
+def _case_results() -> dict[tuple[str, float], object]:
+    a = summarise("baseline", 1.0, _grid((A, 0.967, -0.027), (B, 0.952, 0.422)))
+    b = summarise("stt_buy_pct", 0.75, _grid((A, 0.967, 0.055), (B, 0.952, 0.465)))
+    return {("baseline", 1.0): a, ("stt_buy_pct", 0.75): b}
+
+
+def _write_csv(path: Path, results: dict) -> None:
+    rows = [_cr._row_of(r) for r in results.values()]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = _csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+@pytest.fixture
+def committed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
+    results = _case_results()
+    path = tmp_path / "cost_robustness.csv"
+    _write_csv(path, results)
+    monkeypatch.setattr(_cr, "REPORT_OUT", path)
+    return results
+
+
+def test_verify_passes_when_every_case_reproduces(committed: dict) -> None:
+    assert _cr.verify(committed) == 0
+
+
+def test_verify_catches_a_difference_in_the_last_reported_digit(
+    committed: dict,
+) -> None:
+    """1e-6 is the CSV's own resolution. Anything coarser would let real drift
+    through while the check still reported OK."""
+    key = ("baseline", 1.0)
+    drifted = dict(committed)
+    drifted[key] = dataclasses.replace(
+        committed[key],
+        best_gross_net_sharpe=committed[key].best_gross_net_sharpe + 1e-6,
+    )
+    assert _cr.verify(drifted) == 1
+
+
+def test_verify_catches_an_integer_field_changing(committed: dict) -> None:
+    """Floats are not the only thing that can drift -- a rank is an int, and a
+    tie-break that stopped being deterministic would move it."""
+    key = ("baseline", 1.0)
+    drifted = dict(committed)
+    drifted[key] = dataclasses.replace(committed[key], gross_pick_rank_by_net=1)
+    assert _cr.verify(drifted) == 1
+
+
+def test_verify_catches_a_case_that_went_missing(committed: dict) -> None:
+    short = {k: v for k, v in committed.items() if k != ("baseline", 1.0)}
+    assert _cr.verify(short) == 1
+
+
+def test_verify_catches_a_case_absent_from_the_committed_file(
+    committed: dict,
+) -> None:
+    extra = dict(committed)
+    extra[("gst_pct", 1.25)] = summarise("gst_pct", 1.25, _grid((A, 0.9, -0.1), (B, 0.8, 0.4)))
+    assert _cr.verify(extra) == 1
+
+
+def test_verify_stops_rather_than_passing_when_there_is_nothing_to_verify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An absent CSV must not read as agreement."""
+    monkeypatch.setattr(_cr, "REPORT_OUT", tmp_path / "does_not_exist.csv")
+    assert _cr.verify(_case_results()) == 2
+
+
+def test_the_writer_and_the_verifier_format_identically(committed: dict) -> None:
+    """Both go through _row_of, so a comparison can never pass or fail on a
+    formatting difference that never reaches the file."""
+    row = _cr._row_of(next(iter(committed.values())))
+    assert row["best_gross_net_sharpe"] == "-0.027000"
+    assert row["gross_pick_rank_by_net"] == "2"
+    assert row["inversion_holds"] == "True"
