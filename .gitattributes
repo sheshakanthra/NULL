@@ -1,0 +1,12 @@
+# Committed audit artifacts are byte-exact evidence, not source. The pipeline
+# writes them with newline="\n" on every platform and a determinism test asserts
+# they are byte-identical across runs -- so git must not rewrite their line
+# endings on checkout. Without this, a fresh clone on Windows gets a report.html
+# whose bytes differ from the one the pipeline produces, and "byte-identical"
+# stops being checkable by anyone who cloned.
+examples/rsi2_nifty/audit_out/verdict.json   -text
+examples/rsi2_nifty/audit_out/report.html    -text
+
+# Parquet is binary. Git usually detects this, but the reference caches and the
+# trial-series siblings are the evidence base; say it rather than rely on it.
+*.parquet                                    binary
