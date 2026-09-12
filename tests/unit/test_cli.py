@@ -19,6 +19,7 @@ import pandas as pd
 import pytest
 
 from null.cli import EXIT_PASS, EXIT_REJECT, EXIT_USAGE, main
+from null.contracts import StrategyRun, Verdict
 
 IST = timezone(timedelta(hours=5, minutes=30))
 REPO = Path(__file__).resolve().parents[2]
@@ -107,6 +108,40 @@ def run_json(tmp_path: Path, bars_parquet: Path) -> Path:
     path = tmp_path / "run.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+@pytest.fixture
+def lean_run_with_trials(
+    run_json: Path, bars_parquet: Path, tmp_path: Path
+) -> tuple[Path, Path]:
+    """A run.json declaring three trials without series, plus the sibling parquet."""
+    frame = pd.read_parquet(bars_parquet)
+    stamps = sorted({d for d in frame["date"]})
+    payload = json.loads(run_json.read_text())
+    payload["n_trials"] = 3
+    payload["trials"] = [
+        {"param_hash": "h0", "sharpe": 0.9},
+        {"param_hash": "h1", "sharpe": 0.3},
+        {"param_hash": "h2", "sharpe": -0.1},
+    ]
+    lean = tmp_path / "lean_run_fixture.json"
+    lean.write_text(json.dumps(payload), encoding="utf-8")
+
+    localised = [
+        pd.Timestamp(s).replace(hour=15, minute=30).tz_localize(IST) for s in stamps
+    ]
+    rng = np.random.default_rng(5)
+    n = len(localised) - 1
+    trials_path = tmp_path / "fixture.trials.parquet"
+    pd.DataFrame(
+        {
+            "date": localised[1:],
+            "h0": rng.normal(0.001, 0.01, n),
+            "h1": rng.normal(0.0002, 0.01, n),
+            "h2": rng.normal(-0.0005, 0.01, n),
+        }
+    ).to_parquet(trials_path, index=False)
+    return lean, trials_path
 
 
 def _argv(
@@ -573,3 +608,103 @@ def test_trials_parquet_gives_pbo_real_evidence_instead_of_not_computable(
     assert "not applicable" not in pbo_panel
     assert "not computable" not in pbo_panel
     assert "symmetric train/test partitions" in pbo_panel  # real computed evidence
+
+
+# ---------------------------------------------------------------------------
+# --sensitivity: a parameter grid IS the neighbourhood surface. Without one the
+# gate abstains, and NOT_COMPUTABLE is not a pass.
+# ---------------------------------------------------------------------------
+
+
+def _surface(peak_hash: str, *, peak: float = 1.0, ring: float = 0.8) -> dict:
+    """A one-parameter surface: the peak plus its +/-1 and +/-2 rings."""
+    points = [{"param_hash": peak_hash, "offsets": {"p": 0}, "sharpe": peak}]
+    points += [
+        {"param_hash": f"n{o}", "offsets": {"p": o}, "sharpe": ring}
+        for o in (-2, -1, 1, 2)
+    ]
+    return {
+        "param_names": ["p"],
+        "peak_sharpe": peak,
+        "neighborhood_mean_sharpe": ring,
+        "neighborhood_ratio": ring / peak,
+        "points": points,
+    }
+
+
+def test_without_a_surface_the_plateau_gate_abstains_rather_than_passing(
+    run_json, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    out = tmp_path / "no_surface"
+    main(_argv(run_json, bars_parquet, out, benchmark=benchmark_parquet))
+    verdict = json.loads((out / "verdict.json").read_text())
+    gate = next(g for g in verdict["gates"] if g["name"] == "sensitivity_plateau")
+    assert gate["state"] == "NOT_COMPUTABLE"
+    assert gate["passed"] is False, "abstaining must never count as a pass"
+
+
+def test_a_supplied_surface_makes_the_plateau_gate_judge(
+    run_json, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    payload = json.loads(run_json.read_text())
+    surface = tmp_path / "surface.json"
+    surface.write_text(json.dumps(_surface(payload["param_hash"])), encoding="utf-8")
+
+    out = tmp_path / "with_surface"
+    argv = _argv(run_json, bars_parquet, out, benchmark=benchmark_parquet)
+    argv += ["--sensitivity", str(surface)]
+    main(argv)
+
+    verdict = json.loads((out / "verdict.json").read_text())
+    gate = next(g for g in verdict["gates"] if g["name"] == "sensitivity_plateau")
+    assert gate["state"] in ("PASS", "FAIL"), "a supplied surface must be judged"
+    assert gate["state"] == "PASS"  # ratio 0.80 clears the 0.60 threshold
+
+
+def test_a_spike_surface_fails_the_plateau_gate(
+    run_json, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    """The gate must still be capable of failing. A wiring that only ever passes
+    would be worse than the abstention it replaced."""
+    payload = json.loads(run_json.read_text())
+    surface = tmp_path / "spike.json"
+    surface.write_text(
+        json.dumps(_surface(payload["param_hash"], peak=1.0, ring=0.1)),
+        encoding="utf-8",
+    )
+    out = tmp_path / "spike_out"
+    argv = _argv(run_json, bars_parquet, out, benchmark=benchmark_parquet)
+    argv += ["--sensitivity", str(surface)]
+    main(argv)
+
+    verdict = json.loads((out / "verdict.json").read_text())
+    gate = next(g for g in verdict["gates"] if g["name"] == "sensitivity_plateau")
+    assert gate["state"] == "FAIL"
+
+
+def test_a_surface_around_a_different_point_is_refused(
+    run_json, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    """A neighbourhood built around someone else's peak must not excuse this run."""
+    surface = tmp_path / "foreign.json"
+    surface.write_text(json.dumps(_surface("some_other_hash")), encoding="utf-8")
+
+    out = tmp_path / "foreign_out"
+    argv = _argv(run_json, bars_parquet, out, benchmark=benchmark_parquet)
+    argv += ["--sensitivity", str(surface)]
+    assert main(argv) == EXIT_USAGE
+
+
+def test_a_surface_with_no_peak_is_refused(
+    run_json, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    payload = json.loads(run_json.read_text())
+    surface = _surface(payload["param_hash"])
+    surface["points"] = [p for p in surface["points"] if p["offsets"]["p"] != 0]
+    path = tmp_path / "peakless.json"
+    path.write_text(json.dumps(surface), encoding="utf-8")
+
+    out = tmp_path / "peakless_out"
+    argv = _argv(run_json, bars_parquet, out, benchmark=benchmark_parquet)
+    argv += ["--sensitivity", str(path)]
+    assert main(argv) == EXIT_USAGE

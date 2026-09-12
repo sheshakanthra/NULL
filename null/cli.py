@@ -159,6 +159,43 @@ def _series(values: np.ndarray, stamps: Sequence[object]) -> Series:
     )
 
 
+def load_sensitivity(path: Path, run: StrategyRun) -> SensitivityResult:
+    """Read a parameter-neighbourhood surface and check it belongs to this run.
+
+    The surface is the evidence the sensitivity_plateau gate judges on, so it is
+    read and then verified, never trusted. Two checks, both fatal:
+
+    * the surface must contain the peak, the all-zero offset point. Without it
+      there is nothing for the neighbourhood to be a neighbourhood *of*, and the
+      ratio the gate reads would be measured against an arbitrary member.
+    * that peak's ``param_hash`` must equal the run's. A surface built around a
+      different point describes some other strategy's neighbourhood, and pairing
+      it with this run would let a plateau found elsewhere excuse a spike here.
+
+    Both are the failure this gate exists to catch, so neither degrades to a
+    warning -- a surface that cannot be tied to the run is missing evidence.
+    """
+    try:
+        surface = SensitivityResult.model_validate_json(path.read_bytes())
+    except ValidationError as exc:
+        raise InputError(_readable_validation_error(path, exc)) from exc
+
+    peaks = [p for p in surface.points if all(v == 0 for v in p.offsets.values())]
+    if not peaks:
+        raise InputError(
+            f"{path} has no all-zero offset point, so it carries no peak. A "
+            "neighbourhood without the point it surrounds cannot be scored."
+        )
+    if peaks[0].param_hash != run.param_hash:
+        raise InputError(
+            f"{path} is a neighbourhood around param_hash {peaks[0].param_hash!r}, "
+            f"but the run submitted {run.param_hash!r}. This surface describes a "
+            "different point; scoring the run against it would let a plateau found "
+            "elsewhere stand in for this one."
+        )
+    return surface
+
+
 def build_evidence(
     run: StrategyRun,
     bars: tuple[Bar, ...],
@@ -166,6 +203,7 @@ def build_evidence(
     costs: IndiaEquityCostModel,
     cost_robustness_path: Path | None = None,
     benchmark_is_total_return: bool = False,
+    sensitivity_surface: SensitivityResult | None = None,
 ) -> tuple[Evidence, dict[str, object]]:
     """Assemble the Evidence the gates consume, plus the report context.
 
@@ -225,9 +263,10 @@ def build_evidence(
         for split, value in zip(splits, folds.fold_returns)
     )
 
-    # No parameter grid arrives with a single run, so the surface holds the peak
+    # A supplied surface is the real neighbourhood and the gate judges on it. With
+    # none, no parameter grid arrived with the run, so the surface holds the peak
     # alone and the gate reports NOT_COMPUTABLE rather than crying curve-fitting.
-    sensitivity = SensitivityResult(
+    sensitivity = sensitivity_surface or SensitivityResult(
         param_names=("submitted",),
         peak_sharpe=dsr.observed_sharpe_annual,
         neighborhood_mean_sharpe=dsr.observed_sharpe_annual,
@@ -447,6 +486,11 @@ def run_audit_command(args: argparse.Namespace) -> int:
                 Path(args.cost_robustness) if args.cost_robustness else None
             ),
             benchmark_is_total_return=benchmark_is_tri,
+            sensitivity_surface=(
+                load_sensitivity(Path(args.sensitivity), run)
+                if args.sensitivity
+                else None
+            ),
         )
     except ValueError as exc:
         raise InputError(str(exc)) from exc
@@ -518,6 +562,18 @@ def build_parser() -> argparse.ArgumentParser:
             "a broker contract note make every cost LEVEL unverified; a sweep "
             "establishes which CONCLUSIONS survive that, and the limitations band "
             "reports the measured result instead of a blanket disclaimer"
+        ),
+    )
+    audit.add_argument(
+        "--sensitivity",
+        default=None,
+        help=(
+            "parameter-neighbourhood surface JSON (a serialised SensitivityResult, "
+            "as examples/rsi2_nifty/build_run.py writes). Without it the "
+            "sensitivity_plateau gate has only the submitted point and reports "
+            "NOT_COMPUTABLE -- it does not judge, and NOT_COMPUTABLE is not a pass. "
+            "A parameter grid already IS this surface; supply it and the gate can "
+            "tell a plateau from a spike"
         ),
     )
     audit.add_argument("--out", default=".", help="output directory")
