@@ -1,0 +1,41 @@
+{
+  "endpoint_shape_is_provenance": "The URL, method and cinfo payload format recorded here are themselves provenance and may need re-capture. Do NOT gate on Content-Type: a SUCCESSFUL call answers with text/html and a JSON body. The refusal mode is a large body that does not parse as JSON -- that is the PAGE RENDERING, meaning the request never reached the web method, so the path or payload format has moved. That is a signal to re-capture the live request from a browser, NOT to try more headers, sessions or user agents.",
+  "fetched_on": "2026-09-12",
+  "first_date": "1999-06-30",
+  "index": "NIFTY 50",
+  "last_date": "2026-09-11",
+  "method": "POST",
+  "note": "Community-documented endpoint, not a supported API. It can change or block without notice. This parquet is committed so the demo stays reproducible if it does.",
+  "payload_shape": {
+    "cinfo": "{'name':'NIFTY 50','startDate':'01-Jan-1999','endDate':'12-Sep-2026','indexName':'NIFTY 50'}"
+  },
+  "price_route_is_not_this_one": "https://niftyindices.com/BackPage/getHistoricaldatatabletoString is the historical-data TABLE route and returns the PRICE index (OPEN/HIGH/LOW/CLOSE). It is NOT total return. It is used by this script only to supply the price series that validate_tri_against_pri checks the TRI against.",
+  "response_columns": [
+    "Date",
+    "Index Name",
+    "NTR_Value",
+    "RequestNumber",
+    "TotalReturnsIndex"
+  ],
+  "route_history": {
+    "1_original": "https://www.niftyindices.com/Backpage.aspx/getTotalReturnIndexString",
+    "2_superseded": "https://www.niftyindices.com/BackPage/getTotalReturnIndexString",
+    "3_current": "https://niftyindices.com/BackPage/getTotalReturnIndexString",
+    "note": "The route has moved twice; the shape is itself provenance."
+  },
+  "rows": 6768,
+  "series_starts_late": "Requested from 1999-01-01 but the endpoint's TRI history begins 1999-06-30. The earlier months are absent upstream, not dropped.",
+  "session": "None required. A cold POST answers in full; probing on 12-Sep-2026 showed a bootstrap GET of the historical-data page sets no cookies at all and changes nothing about the response. This is unlike the NSE corporate-actions API, which does need a session cookie.",
+  "source": "https://niftyindices.com/BackPage/getTotalReturnIndexString",
+  "tri_validation": {
+    "is_valid": true,
+    "observed_gap": 0.0151695722384,
+    "pri_annualised": 0.117373825798,
+    "rationale": "Total return dominates price return in every window checked, and the annualised gap of 1.52% matches the published 1.35%.",
+    "tri_annualised": 0.132543398037,
+    "tri_exceeds_pri_everywhere": true,
+    "windows_checked": 24,
+    "windows_violating": 0
+  },
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+}
