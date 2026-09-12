@@ -196,6 +196,62 @@ def load_sensitivity(path: Path, run: StrategyRun) -> SensitivityResult:
     return surface
 
 
+def write_verdict(verdict: Verdict, path: Path) -> Path | None:
+    """Write ``verdict.json``, splitting per-trial return series into a sibling.
+
+    Same split ``run.json`` already uses, and for the same reason: the series are
+    the overwhelming bulk of the artifact. Embedding 108 trials inline makes an
+    18MB JSON file that no reviewer opens and no diff survives, and a verdict
+    nobody reads is not evidence of anything.
+
+    The sibling is named from the verdict's own filename -- ``verdict.json`` ->
+    ``verdict.trials.parquet`` -- so the reference is the relative path itself,
+    exactly as ``run.json`` -> ``run.trials.parquet``. Rehydrate it with
+    :func:`enrich_trials_from_parquet`, the same function the run side uses.
+
+    Returns the sibling path, or None when there was nothing to split out.
+    """
+    trials = verdict.generated_from.trials
+    hydrated = [t for t in trials if t.returns is not None]
+    if not hydrated:
+        path.write_bytes(verdict.canonical_json())
+        return None
+
+    import pandas as pd
+
+    reference = hydrated[0].returns
+    assert reference is not None
+    columns: dict[str, object] = {"date": list(reference.ts)}
+    for trial in hydrated:
+        series = trial.returns
+        assert series is not None
+        if series.ts != reference.ts:
+            raise InputError(
+                f"trial {trial.param_hash!r} is on a different timeline to "
+                f"{hydrated[0].param_hash!r}. The wide parquet format carries one "
+                "shared date column, so mismatched timelines cannot be written "
+                "without silently realigning them."
+            )
+        columns[trial.param_hash] = list(series.values)
+
+    trials_path = path.with_name(f"{path.stem}.trials.parquet")
+    pd.DataFrame(columns).to_parquet(trials_path, index=False)
+
+    # Dehydrated exactly as run.json ships: trials keep param_hash and sharpe, the
+    # series move out. TrialRecord.returns is already Optional, so this is the
+    # contract's own shape, not a widening of it.
+    dehydrated = tuple(t.model_copy(update={"returns": None}) for t in trials)
+    slimmed = verdict.model_copy(
+        update={
+            "generated_from": verdict.generated_from.model_copy(
+                update={"trials": dehydrated}
+            )
+        }
+    )
+    path.write_bytes(slimmed.canonical_json())
+    return trials_path
+
+
 def build_evidence(
     run: StrategyRun,
     bars: tuple[Bar, ...],
@@ -507,7 +563,7 @@ def run_audit_command(args: argparse.Namespace) -> int:
         raise InputError(str(exc)) from exc
 
     out.mkdir(parents=True, exist_ok=True)
-    verdict_path.write_bytes(report.verdict.canonical_json())
+    trials_path = write_verdict(report.verdict, verdict_path)
     write_report(
         report,
         report_path,
@@ -524,6 +580,8 @@ def run_audit_command(args: argparse.Namespace) -> int:
     if report.not_computable:
         print(f"  not computable: {', '.join(report.not_computable)}")
     print(f"  {verdict_path}")
+    if trials_path is not None:
+        print(f"  {trials_path}")
     print(f"  {report_path}")
     return EXIT_PASS if report.verdict.result == "PASS" else EXIT_REJECT
 

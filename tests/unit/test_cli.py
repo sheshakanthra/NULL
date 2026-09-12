@@ -267,6 +267,78 @@ def test_two_invocations_produce_byte_identical_artifacts(
     assert (first / "report.html").read_bytes() == (second / "report.html").read_bytes()
 
 
+def test_two_invocations_are_byte_identical_in_the_trials_parquet_too(
+    lean_run_with_trials, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    """Determinism covers BOTH halves of a split verdict, not just the JSON.
+
+    Splitting the trial series out moves the bulk of the artifact into a second
+    file. A determinism assertion that still only reads verdict.json would go on
+    passing while the parquet drifted underneath it, which is precisely the blind
+    spot the split could introduce.
+    """
+    lean, trials_path = lean_run_with_trials
+    first, second = tmp_path / "d1", tmp_path / "d2"
+    for out in (first, second):
+        argv = _argv(lean, bars_parquet, out, benchmark=benchmark_parquet)
+        argv += ["--trials-parquet", str(trials_path)]
+        main(argv)
+
+    for name in ("verdict.json", "verdict.trials.parquet", "report.html"):
+        assert (first / name).read_bytes() == (second / name).read_bytes(), name
+
+
+def test_the_verdict_splits_its_trial_series_into_a_sibling_parquet(
+    lean_run_with_trials, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    """verdict.json keeps the trial records; the series live in the sibling."""
+    lean, trials_path = lean_run_with_trials
+    out = tmp_path / "split"
+    argv = _argv(lean, bars_parquet, out, benchmark=benchmark_parquet)
+    argv += ["--trials-parquet", str(trials_path)]
+    main(argv)
+
+    sibling = out / "verdict.trials.parquet"
+    assert sibling.exists(), "the sibling parquet was not written"
+
+    verdict = json.loads((out / "verdict.json").read_text())
+    trials = verdict["generated_from"]["trials"]
+    assert len(trials) == 3, "the trial RECORDS must survive the split"
+    assert all(t["returns"] is None for t in trials), "series must not stay inline"
+    assert {t["param_hash"] for t in trials} == {"h0", "h1", "h2"}
+
+    columns = set(pd.read_parquet(sibling).columns)
+    assert columns == {"date", "h0", "h1", "h2"}
+
+
+def test_a_split_verdict_rehydrates_through_the_same_function_the_run_side_uses(
+    lean_run_with_trials, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    """The split is only legitimate if it round-trips. Prove it does."""
+    from null.cli import enrich_trials_from_parquet
+
+    lean, trials_path = lean_run_with_trials
+    out = tmp_path / "roundtrip"
+    argv = _argv(lean, bars_parquet, out, benchmark=benchmark_parquet)
+    argv += ["--trials-parquet", str(trials_path)]
+    main(argv)
+
+    verdict = Verdict.model_validate_json((out / "verdict.json").read_bytes())
+    assert all(t.returns is None for t in verdict.generated_from.trials)
+
+    rehydrated = enrich_trials_from_parquet(
+        verdict.generated_from, out / "verdict.trials.parquet"
+    )
+    assert all(t.returns is not None for t in rehydrated.trials)
+
+    original = enrich_trials_from_parquet(
+        StrategyRun.model_validate_json(lean.read_bytes()), trials_path
+    )
+    got = {t.param_hash: t.returns.values for t in rehydrated.trials}  # type: ignore[union-attr]
+    want = {t.param_hash: t.returns.values for t in original.trials}  # type: ignore[union-attr]
+    assert got == want
+
+
 # ---------------------------------------------------------------------------
 # invariant 2: the audit path never touches the network
 # ---------------------------------------------------------------------------
