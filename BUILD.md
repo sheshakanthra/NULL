@@ -396,10 +396,20 @@ and the leakage flags. `tests/golden/harness.SYNTHESISED` names them, and the li
 band on every report lists them.
 
 So a green suite proves the *gates* behave correctly on known inputs. It does not prove
-the pipeline produces those inputs correctly from a strategy and its bars. Wiring
-`partition/walkforward.py`, `sensitivity/neighborhood.py`, ADV participation and
-`leakage/audit.py` into the evidence build is outstanding, and until that lands "all eight
-green" is a statement about the judge, not about the whole machine.
+the pipeline produces those inputs correctly from a strategy and its bars.
+
+**Settled at M7.** All four are now computed from real inputs on the real audit path:
+`partition/walkforward.py`, `sensitivity/neighborhood.py` (surface supplied via
+`--sensitivity`), ADV participation and `leakage/audit.py` are wired into
+`null/cli.build_evidence`, and `examples/rsi2_nifty` exercises every one of them on real
+NIFTY 50 bars. The four entries remain in `SYNTHESISED` because they describe the
+**fixtures**, not the pipeline: a golden fixture is a synthetic return series with no
+bars, no grid and no weights, so there is nothing for those stages to read. That list
+does not shrink by wiring anything — only by a fixture gaining the input it lacks.
+
+Read the two claims separately. "All eight green" is a statement about the judge.
+"`examples/rsi2_nifty` synthesises nothing" is the statement about the whole machine,
+and as of M7 it holds.
 
 ### Open decision — the benchmark series (must be settled before M6 is called green)
 
@@ -446,6 +456,35 @@ Reproduce the reel's claim on your own harness.
 4. Expected output: REJECT, with the deflation number and the after-cost benchmark
    comparison stated in one sentence each.
 5. Commit the `verdict.json` and the rendered HTML to `examples/rsi2_nifty/`.
+
+### M7 — DONE
+
+Verdict **REJECT** on `rsi2_nifty50`, all seven gates judged, none `NOT_COMPUTABLE`:
+
+| gate | state |
+|---|---|
+| `leakage_clean` | PASS |
+| `beats_benchmark_net` | FAIL — 3.16% CAGR net against 13.25% benchmark; alpha t-stat 1.58 (Newey-West, 8 lags) against a threshold of 2.0 |
+| `deflated_sharpe` | FAIL — 0.00 against 0.95 |
+| `reality_check` | FAIL — p = 0.977 against 0.050 |
+| `walkforward_consistency` | PASS — net-positive in 4 of 5 out-of-sample folds |
+| `sensitivity_plateau` | PASS — neighbourhood mean Sharpe 77% of peak (0.32 against 0.42), threshold 60% |
+| `capacity` | FAIL — largest order 5.1% of 20-day ADV against a 5.0% tolerance |
+
+Benchmark is the real NIFTY 50 **TRI**, 6,768 sessions from 1999-06-30, validated
+against the price index before it was committed (24 of 24 three-year windows dominated,
+annualised gap 1.5170% against the published 1.35%).
+
+Artifacts in `examples/rsi2_nifty/audit_out/`. `verdict.json` splits its per-trial return
+series into the sibling `verdict.trials.parquet`, the same split `run.json` uses, which
+takes the JSON from 18.7MB to 1.4MB. Both files plus `report.html` are byte-identical
+across runs; `evidence_hash 3f40aa2efda9a477…`.
+
+**Note the shape of this REJECT.** The strategy passes on plateau and walk-forward and
+still dies — it is not curve-fit to a spike and its result is not carried by one fold. It
+fails because after real costs against a real total-return benchmark it does not clear
+the market, and what outperformance there is (p = 0.977) is what chance produces on this
+history. That is the intended kill: not a harness artifact, and not a parameter accident.
 
 ### Spec correction — the fourth holding-cap value *(settled; not an open question)*
 
@@ -530,7 +569,7 @@ M3  Leakage audit + point-in-time universe plumbing                 [3 days]  �
 M4  Statistical adversary (DSR → PBO → bootstrap RC → walkforward)  [4 days]
 M5  Verdict engine + gate configs + rationale strings               [1 day]
 M6  Golden suite, all 8 fixtures green                              [2 days]
-M7  RSI(2) kill demo + rendered report                              [1 day]
+M7  RSI(2) kill demo + rendered report                              [1 day]  ← DONE
 ```
 
 **Gate on M6.** Do not point NULL at a strategy you actually care about until all eight

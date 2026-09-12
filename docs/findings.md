@@ -107,6 +107,63 @@ test — than it ever was as a finding.
 
 ---
 
+## 6. A placeholder that was one line of code away from passing every strategy
+
+Until M7 the CLI could not accept a parameter neighbourhood, so `build_evidence`
+constructed a placeholder surface to fill the required `Evidence.sensitivity`
+field. The placeholder held the submitted point alone — and, because a surface
+needs a ratio, declared:
+
+```python
+neighborhood_ratio=1.0,
+```
+
+A ratio of 1.0 is a *perfect plateau*: the strongest possible result this gate can
+report. The placeholder was not neutral. It was the most favourable value in the
+range, written into the evidence by the pipeline itself.
+
+What stopped it being read that way is a single check in `sensitivity_plateau`:
+
+```python
+if len(evidence.sensitivity.points) <= 1:
+    return not_computable(...)
+```
+
+The gate abstains on the **number of points**, not on the ratio. So the 1.0 was
+never read — one placeholder point, so the gate declined to judge. Correct
+behaviour, and it is what the audit reported for the whole of M6.
+
+But the two facts sat one line apart with nothing tying them together. Any change
+that gave the placeholder a second point — a filler neighbour, a peak duplicated
+for symmetry, a future stub written to look more realistic — would have moved it
+past the length check and into the scoring path, where the pipeline's own 1.0
+would have been scored against a 0.60 threshold and passed. The rationale string
+printed on the report would have read: *"The mean Sharpe of the immediate
+parameter neighbourhood is 100% of the peak."* A maximally reassuring sentence,
+about a strategy nobody had scanned, sourced entirely from a placeholder.
+
+The fix is that the placeholder is now reached only when no surface is supplied,
+and `examples/rsi2_nifty` supplies a real one — its 108-variant grid, which was a
+neighbourhood all along and had simply never been wired in. The gate now judges:
+77% of peak, a genuine plateau, passed on evidence.
+
+Two guards were added rather than one, because the failure mode is not "the
+surface is missing" but "the surface does not describe *this* run". `--sensitivity`
+refuses a surface with no all-zero peak point, and refuses one whose peak
+`param_hash` is not the run's. Either would let a plateau measured somewhere else
+be read as this strategy's.
+
+**What makes this an item rather than a footnote:** nothing here was broken. No
+test failed, no verdict was ever wrong, and the abstention was honest for as long
+as it lasted. The defect is that the *safe* behaviour depended on a coincidence
+between two lines in different files, while the *unsafe* value sat pre-loaded in
+the evidence waiting for the coincidence to lapse. A default that is harmless only
+because something unrelated is currently true is not a safe default. Per invariant
+6, a placeholder that cannot be computed should have been unconstructible or
+failing — never the best available number.
+
+---
+
 ## The pattern
 
 **Items 2 and 4 are the same shape.** In both, a test covering the defective path
@@ -188,9 +245,10 @@ output is not evidence, however many rows it has.
 ## Why this belongs in the report rather than a changelog
 
 NULL exists to say that a number produced by an unaudited process should not be
-believed. Four defects hidden behind passing tests, plus a headline claim that
-turned out to rest on a boundary, are the strongest available evidence for that
-claim — and the least comfortable. The controls above are the other half of it:
+believed. Four defects hidden behind passing tests, a headline claim that turned
+out to rest on a boundary, and a placeholder holding the best possible value while
+one unrelated line kept it out of the scoring path, are the strongest available
+evidence for that claim — and the least comfortable. The controls above are the other half of it:
 not a record of what went wrong, but of what was done to make going wrong
 visible. A tool that makes
 this argument while concealing its own history of exactly this failure would be
