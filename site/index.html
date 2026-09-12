@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NULL — strategy audit terminal</title>
+<meta name="description" content="A deterministic strategy audit engine. It assumes your strategy is worthless and makes it prove otherwise. Most don't.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+  /* ─────────────────────────────────────────────────────────────
+     NULL terminal showcase — final
+     All figures below are transcribed once from the committed
+     audit_out/evidence.json + verdict.json (evidence_hash
+     3f40aa2e…). Regenerate by hand only if that verdict changes.
+     Every number carries a data-src comment to its key.
+     ───────────────────────────────────────────────────────────── */
+  :root{
+    --bg:#070b0a; --bg2:#0a100e;
+    --panel:rgba(18,26,23,0.66); --panel-solid:#0f1613;
+    --grid:#1b2723; --faint:#33403a;
+    --ink:#d3dbd7; --dim:#77857f; --dimmer:#4a564f;
+    --amber:#f0aa3c; --amber-dim:#9a6f2a; --amber-glow:rgba(240,170,60,0.5);
+    --loss:#ff5b60; --loss-glow:rgba(255,91,96,0.45);
+    --gain:#37e08e; --gain-glow:rgba(55,224,142,0.4);
+    --paper:#ece7d9;
+    --disp:'Space Grotesk',sans-serif; --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--ink);font-family:var(--mono);font-size:15px;
+    line-height:1.55;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;
+    letter-spacing:-0.01em;overflow-x:hidden}
+  body::before{content:"";position:fixed;inset:0;z-index:-2;
+    background:radial-gradient(1200px 700px at 72% -8%,rgba(240,170,60,0.09),transparent 60%),
+      radial-gradient(900px 600px at 8% 108%,rgba(55,224,142,0.05),transparent 55%),
+      linear-gradient(180deg,var(--bg),var(--bg2))}
+  body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:0.35;
+    background:repeating-linear-gradient(0deg,rgba(255,255,255,0.012) 0 1px,transparent 1px 3px)}
+  @media (prefers-reduced-motion:no-preference){
+    .reveal{opacity:0;transform:translateY(18px) scale(0.996);
+      transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+    .reveal.in{opacity:1;transform:none}}
+
+  .statusbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;height:36px;
+    background:rgba(10,16,14,0.82);backdrop-filter:blur(14px);border-bottom:1px solid var(--grid);
+    font-size:12px;color:var(--dim);overflow:hidden;white-space:nowrap}
+  .statusbar .brand{color:var(--amber);font-weight:800;letter-spacing:0.24em;padding:0 18px;
+    height:100%;display:flex;align-items:center;border-right:1px solid var(--grid);
+    text-shadow:0 0 14px var(--amber-glow)}
+  .ticker{display:inline-flex;gap:36px;padding-left:36px;animation:tick 40s linear infinite}
+  @media (prefers-reduced-motion:reduce){.ticker{animation:none}}
+  @keyframes tick{to{transform:translateX(-50%)}}
+  .tk{display:inline-flex;gap:8px;align-items:baseline}
+  .tk b{color:var(--ink);font-weight:500}
+  .tk .up{color:var(--gain)} .tk .dn{color:var(--loss)}
+
+  .wrap{max-width:1000px;margin:0 auto;padding:0 26px}
+  section{padding:13vh 0;border-bottom:1px solid var(--grid);position:relative}
+  section:last-of-type{border-bottom:none}
+  .tag{font-size:11.5px;color:var(--amber);opacity:0.85;letter-spacing:0.26em;margin-bottom:24px;
+    display:flex;align-items:center;gap:12px}
+  .tag::before{content:"";width:26px;height:1px;background:var(--amber);opacity:0.6;box-shadow:0 0 8px var(--amber-glow)}
+  h1{font-family:var(--disp);font-size:clamp(42px,8.4vw,86px);font-weight:700;line-height:0.96;
+    letter-spacing:-0.045em;margin-bottom:22px}
+  h1 .neg{color:var(--amber);text-shadow:0 0 34px var(--amber-glow)}
+  h2{font-family:var(--disp);font-size:clamp(26px,4.2vw,38px);font-weight:600;letter-spacing:-0.035em;
+    line-height:1.08;margin-bottom:18px}
+  p.lede{font-size:16px;color:var(--dim);max-width:60ch;line-height:1.65}
+  p.body{font-size:14.5px;color:var(--ink);max-width:64ch;margin-top:14px}
+  .dim{color:var(--dim)} .amber{color:var(--amber)} .loss{color:var(--loss)} .gain{color:var(--gain)}
+
+  .hero{min-height:90vh;display:flex;flex-direction:column;justify-content:center}
+  .hero .sub{font-size:16px;color:var(--dim);max-width:60ch;margin-top:10px;line-height:1.65}
+  .hero .meta{margin-top:44px;font-size:12px;color:var(--dimmer);display:flex;gap:14px;flex-wrap:wrap}
+  .hero .meta span{border:1px solid var(--grid);padding:6px 12px;border-radius:2px;color:var(--dim);
+    letter-spacing:0.08em;background:var(--panel);backdrop-filter:blur(6px)}
+  .blink{display:inline-block;width:12px;height:1.02em;background:var(--amber);vertical-align:-2px;
+    margin-left:6px;box-shadow:0 0 16px var(--amber-glow);animation:bl 1.1s steps(1) infinite}
+  @keyframes bl{50%{opacity:0}}
+
+  .card{background:var(--panel);backdrop-filter:blur(16px) saturate(1.1);border:1px solid var(--grid);
+    border-radius:4px;position:relative;box-shadow:0 24px 60px -30px rgba(0,0,0,0.9),inset 0 1px 0 rgba(255,255,255,0.03)}
+  .card .bar{display:flex;justify-content:space-between;align-items:center;padding:11px 16px;
+    border-bottom:1px solid var(--grid);font-size:12px;color:var(--dim)}
+  .card .bar .fn{color:var(--amber);opacity:0.9}
+  .card .bar .live{display:flex;align-items:center;gap:7px;font-size:11px;letter-spacing:0.1em}
+  .card .bar .live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--gain);
+    box-shadow:0 0 10px var(--gain-glow);animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:0.3}}
+  .stat-row{display:grid;grid-template-columns:repeat(4,1fr)}
+  .stat{padding:26px 20px;border-right:1px solid var(--grid)}
+  .stat:nth-child(4n){border-right:none}
+  .stat .k{font-size:11px;color:var(--dim);letter-spacing:0.08em;margin-bottom:10px}
+  .stat .v{font-family:var(--disp);font-size:34px;font-weight:700;letter-spacing:-0.02em;line-height:1}
+  .stat .v.big{color:var(--gain);text-shadow:0 0 22px var(--gain-glow)}
+  .stat .v.warn{color:var(--amber);text-shadow:0 0 22px var(--amber-glow)}
+  .stat .u{font-size:11.5px;color:var(--dimmer);margin-top:8px}
+  .whisper{margin-top:38px;font-size:20px;color:var(--dim);max-width:58ch;line-height:1.5}
+  .whisper .q{color:var(--amber);border-left:2px solid var(--amber);padding-left:18px;display:block;
+    text-shadow:0 0 20px var(--amber-glow)}
+
+  .gates{margin-top:12px}
+  .gate{display:grid;grid-template-columns:30px 1fr auto 118px;align-items:center;gap:16px;
+    padding:17px 18px;border:1px solid var(--grid);border-radius:3px;margin-bottom:8px;
+    background:var(--panel);backdrop-filter:blur(10px);transition:border-color .4s,box-shadow .4s,background .4s}
+  .gate .ic{font-weight:700;text-align:center;font-size:16px;color:var(--dimmer);transition:color .3s}
+  .gate .name{color:var(--ink)}
+  .gate .obs{color:var(--dim);font-size:12.5px;text-align:right;opacity:0;transition:opacity .5s}
+  .gate .verd{font-size:11px;letter-spacing:0.12em;text-align:right;color:var(--dimmer)}
+  .gate.running{border-color:var(--amber-dim)}
+  .gate.running .verd,.gate.running .ic{color:var(--amber)}
+  .gate.done .obs{opacity:1}
+  .gate.pass{border-color:rgba(55,224,142,0.3);box-shadow:0 0 30px -14px var(--gain-glow)}
+  .gate.pass .ic,.gate.pass .verd{color:var(--gain)}
+  .gate.fail{border-color:rgba(255,91,96,0.34);box-shadow:0 0 30px -12px var(--loss-glow)}
+  .gate.fail .ic,.gate.fail .verd{color:var(--loss)}
+  .stamp{margin-top:30px;display:inline-flex;align-items:center;gap:20px;border:1px solid var(--loss);
+    border-radius:4px;padding:18px 30px;background:rgba(255,91,96,0.05);box-shadow:0 0 50px -20px var(--loss-glow);
+    opacity:0;transform:scale(0.94);transition:opacity .5s,transform .5s}
+  .stamp.show{opacity:1;transform:none}
+  .stamp .big{font-family:var(--disp);font-size:38px;font-weight:700;color:var(--loss);letter-spacing:0.05em;
+    text-shadow:0 0 30px var(--loss-glow)}
+  .stamp .why{font-size:13px;color:var(--dim);max-width:44ch}
+
+  .sentence{background:var(--paper);color:#161310;border-radius:4px;padding:56px 46px;margin-top:8px;
+    font-family:var(--disp);font-size:clamp(20px,2.9vw,28px);line-height:1.42;font-weight:500;
+    letter-spacing:-0.02em;box-shadow:0 30px 80px -30px rgba(240,170,60,0.3)}
+  .sentence b{font-weight:700}
+  .sentence .hl{background:#161310;color:var(--paper);padding:0 8px;border-radius:2px}
+
+  .versus{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px}
+  .versus>div{background:var(--panel);backdrop-filter:blur(14px);border:1px solid var(--grid);
+    border-radius:4px;padding:30px 26px;position:relative;overflow:hidden}
+  .versus .lab{font-size:11px;color:var(--dim);letter-spacing:0.13em;margin-bottom:16px}
+  .versus .num{font-family:var(--disp);font-size:46px;font-weight:700;letter-spacing:-0.03em;line-height:1}
+  .versus .sub{font-size:13px;color:var(--dim);margin-top:14px;line-height:1.55}
+  .versus .naive .num{color:var(--gain);text-shadow:0 0 26px var(--gain-glow)}
+  .versus .real .num{color:var(--loss);text-shadow:0 0 26px var(--loss-glow)}
+  .versus .real::after{content:"";position:absolute;inset:0;background:linear-gradient(135deg,transparent 60%,rgba(255,91,96,0.06))}
+
+  .close h2{max-width:22ch}
+  .kicker{font-size:19px;color:var(--ink);max-width:56ch;margin-top:20px;line-height:1.62}
+  .kicker b{color:var(--amber);font-weight:700;text-shadow:0 0 20px var(--amber-glow)}
+  .foot{margin-top:54px;font-size:12px;color:var(--dimmer);line-height:1.85}
+  .foot a{color:var(--amber);opacity:0.8;text-decoration:none;border-bottom:1px solid var(--faint)}
+  .foot .hash{color:var(--dim);word-break:break-all}
+
+  @media (max-width:640px){
+    .stat-row{grid-template-columns:repeat(2,1fr)}
+    .stat:nth-child(4n){border-right:1px solid var(--grid)} .stat:nth-child(2n){border-right:none}
+    .stat:nth-child(-n+2){border-bottom:1px solid var(--grid)}
+    .versus{grid-template-columns:1fr}
+    .gate{grid-template-columns:26px 1fr 70px;row-gap:2px}
+    .gate .obs{grid-column:2/4;text-align:left}
+    .sentence{padding:38px 26px}}
+</style>
+</head>
+<body>
+
+<div class="statusbar">
+  <div class="brand">NULL</div>
+  <div class="ticker" aria-hidden="true">
+    <span class="tk">RSI(2)·NIFTY50 <b class="up">GROSS SR 0.95</b></span>
+    <span class="tk">NET CAGR <b class="dn">3.16%</b></span>
+    <span class="tk">vs BENCH <b>13.25%</b></span>
+    <span class="tk">DEFLATED SR <b class="dn">~0</b></span>
+    <span class="tk">RC p <b class="dn">0.977</b></span>
+    <span class="tk">VERDICT <b class="dn">REJECT</b></span>
+    <span class="tk">TRIALS <b>108</b></span>
+    <span class="tk">RSI(2)·NIFTY50 <b class="up">GROSS SR 0.95</b></span>
+    <span class="tk">NET CAGR <b class="dn">3.16%</b></span>
+    <span class="tk">vs BENCH <b>13.25%</b></span>
+    <span class="tk">DEFLATED SR <b class="dn">~0</b></span>
+    <span class="tk">RC p <b class="dn">0.977</b></span>
+    <span class="tk">VERDICT <b class="dn">REJECT</b></span>
+    <span class="tk">TRIALS <b>108</b></span>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <section class="hero">
+    <div class="tag">STRATEGY AUDIT ENGINE</div>
+    <h1>Your backtest<br>is <span class="neg">lying</span> to you.<span class="blink"></span></h1>
+    <p class="sub">NULL assumes your strategy is worthless and makes it prove otherwise.
+       Most don't. Here is one with a Sharpe of 0.95 — a number you'd screenshot — audited
+       on real NIFTY&nbsp;50 data, end to end.</p>
+    <div class="meta">
+      <span>DETERMINISTIC</span><span>READ-ONLY · NEVER TRADES</span><span>NO LLM IN THE AUDIT PATH</span>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <div class="tag">01 · THE BACKTEST</div>
+    <h2>It looks like a winner.</h2>
+    <p class="lede">A short mean-reversion strategy on the NIFTY&nbsp;50 — buy oversold, sell
+       the bounce. Best of 108 variants. A Sharpe near 1.0 is the kind of number that ends
+       the conversation and starts the deployment.</p>
+    <div class="card" style="margin-top:24px">
+      <div class="bar"><span class="fn">rsi2_nifty · performance</span><span>15Y · daily · best variant</span></div>
+      <div class="stat-row">
+        <!-- data-src: strategy_gross.sharpe -->
+        <div class="stat"><div class="k">SHARPE</div><div class="v big">0.95</div><div class="u">gross, best of 108</div></div>
+        <!-- data-src: strategy_gross.cagr -->
+        <div class="stat"><div class="k">CAGR</div><div class="v big">7.7%</div><div class="u">gross of costs</div></div>
+        <!-- data-src: strategy_net.max_drawdown -->
+        <div class="stat"><div class="k">MAX DD</div><div class="v">−30%</div><div class="u">net basis · peak to trough</div></div>
+        <!-- data-src: deflated_sharpe.n_trials -->
+        <div class="stat"><div class="k">VARIANTS</div><div class="v">108</div><div class="u">grid searched</div></div>
+      </div>
+    </div>
+    <div class="whisper">
+      <span class="q">"But I tried 108 versions to find this one.
+      Is it a real edge — or did I just get lucky 108 times?"</span>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <div class="tag">02 · THE AUDIT</div>
+    <h2>Seven gates. Every one tries to kill it.</h2>
+    <p class="lede">The verdict defaults to <span class="loss">REJECT</span>. The strategy
+       passes only if it survives all seven — after real costs, against the index that
+       reinvests dividends, adjusted for how many variants were tried to find it.</p>
+    <div class="card" style="margin-top:24px;padding:20px;background:rgba(15,22,19,0.5)">
+      <div class="bar" style="padding:0 4px 16px;border-bottom:1px solid var(--grid);margin-bottom:16px">
+        <span class="fn">null audit rsi2_nifty · 7 gates</span>
+        <span class="live" id="liveflag">EVALUATING</span>
+      </div>
+      <div class="gates" id="gates">
+        <!-- states + observed strings from verdict.json gates[] -->
+        <div class="gate" data-verd="pass" data-obs="0 fatal flags"><span class="ic">·</span><span class="name">leakage_clean</span><span class="obs"></span><span class="verd">QUEUED</span></div>
+        <div class="gate" data-verd="fail" data-obs="α t 1.58 < 2.0 · net 3.16% vs 13.25%"><span class="ic">·</span><span class="name">beats_benchmark_net</span><span class="obs"></span><span class="verd">QUEUED</span></div>
+        <div class="gate" data-verd="fail" data-obs="≈0 < 0.95"><span class="ic">·</span><span class="name">deflated_sharpe</span><span class="obs"></span><span class="verd">QUEUED</span></div>
+        <div class="gate" data-verd="fail" data-obs="p 0.977 > 0.05"><span class="ic">·</span><span class="name">reality_check</span><span class="obs"></span><span class="verd">QUEUED</span></div>
+        <div class="gate" data-verd="pass" data-obs="4 of 5 folds"><span class="ic">·</span><span class="name">walkforward_consistency</span><span class="obs"></span><span class="verd">QUEUED</span></div>
+        <div class="gate" data-verd="pass" data-obs="77% of peak > 60%"><span class="ic">·</span><span class="name">sensitivity_plateau</span><span class="obs"></span><span class="verd">QUEUED</span></div>
+        <div class="gate" data-verd="fail" data-obs="5.1% > 5.0% of ADV"><span class="ic">·</span><span class="name">capacity</span><span class="obs"></span><span class="verd">QUEUED</span></div>
+      </div>
+    </div>
+    <div class="stamp" id="stamp">
+      <span class="big">REJECT</span>
+      <span class="why">It passes the plateau test and walk-forward — it is not a curve-fit
+        spike, not carried by one lucky fold — and it still dies.</span>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <div class="tag">03 · WHY</div>
+    <div class="sentence">
+      <!-- data-src: deflated_sharpe.expected_max_sharpe_annual vs observed_sharpe_annual -->
+      With <b>108 trials</b> over 3,700 sessions, noise alone is expected to produce a
+      maximum Sharpe of <b>6.5</b>. The strategy showed <b>0.42</b>.
+      <span class="hl">The search cannot tell this edge from luck — because there is no edge.</span>
+    </div>
+    <p class="body dim">That single line is the product. Once you account for how many
+       variants were tried, and for the returns' skew (−3.1) and heavy tails, the deflated
+       Sharpe rounds to zero. A number near 1.0 became a number near nothing.</p>
+  </section>
+
+  <section class="reveal">
+    <div class="tag">04 · THE TRAP</div>
+    <h2>The best-looking variant isn't the best variant.</h2>
+    <p class="lede">Pick the variant with the highest Sharpe a naive backtest shows you —
+       and once real costs are charged, it is not even the same strategy.</p>
+    <div class="versus">
+      <div class="naive">
+        <div class="lab">PICKED ON GROSS SHARPE · RANKS 1st</div>
+        <!-- data-src: cost_robustness.csv best_gross_gross_sharpe -->
+        <div class="num">0.97</div>
+        <div class="sub">what the trader ships — top of the grid on the number a naive backtest reports</div>
+      </div>
+      <div class="real">
+        <div class="lab">SAME VARIANT · NET OF COSTS · RANKS 69th</div>
+        <!-- data-src: cost_robustness.csv best_gross_net_sharpe, gross_pick_rank_by_net -->
+        <div class="num">−0.03</div>
+        <div class="sub">brokerage, STT, stamp, GST, DP charge and slippage erode roughly a full point of Sharpe at these rates — <b class="loss">68 places</b> down the grid, giving up 0.45 Sharpe against picking on net</div>
+      </div>
+    </div>
+    <p class="body dim">Robust to the rates being wrong: vary every charge by ±25% and across
+       all 25 re-runs the naive pick never ranks better than 24th of 108, giving up 0.33–0.61
+       net Sharpe. The <i>sign</i> of its net Sharpe is not robust — it flips positive in 4 of
+       25 cases — but the ranking penalty doesn't depend on which way the rates are wrong.</p>
+  </section>
+
+  <section class="close reveal">
+    <div class="tag">VERDICT</div>
+    <h2>It doesn't find strategies. It tells you which ones are real.</h2>
+    <p class="kicker">The system in the reel generates opinions. <b>This one generates evidence
+       about whether opinions are worth anything.</b> Almost everything you feed it comes back
+       REJECT — and that is the point. Every rejection is capital you didn't lose.</p>
+    <div class="foot">
+      RSI(2) mean-reversion · NIFTY 50 constituents · 15Y daily · benchmark NIFTY 50 TRI<br>
+      Four gates fail (benchmark, deflated Sharpe, reality check, capacity); three pass.
+      Cost rates from the published charge list, not reconciled to a live contract note;
+      survivorship and sub-25% corporate actions disclosed in the full report.<br>
+      <span class="hash">generated from verdict &amp; evidence · hash 3f40aa2efda9a4773c7239b5a84b1a0ba75b73b9146dbeba856dd46f018bc4b2</span><br><br>
+      <a href="https://github.com/sheshakanthra/NULL">github.com/sheshakanthra/NULL</a>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  const reduce=window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+  const io=new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{
+      if(!e.isIntersecting)return;
+      e.target.classList.add('in');
+      if(e.target.querySelector('#gates'))runAudit(e.target);
+      io.unobserve(e.target);
+    });
+  },{threshold:0.18});
+  document.querySelectorAll('.reveal').forEach(s=>io.observe(s));
+
+  function runAudit(scope){
+    const gates=[...scope.querySelectorAll('.gate')];
+    const stamp=document.getElementById('stamp'), flag=document.getElementById('liveflag');
+    if(reduce){gates.forEach(settle);flag.textContent='DONE';stamp.classList.add('show');return;}
+    let i=0;
+    (function next(){
+      if(i>=gates.length){flag.textContent='DONE';setTimeout(()=>stamp.classList.add('show'),260);return;}
+      const g=gates[i];g.classList.add('running');
+      g.querySelector('.ic').textContent='▸';g.querySelector('.verd').textContent='RUNNING';
+      setTimeout(()=>{settle(g);i++;next();},300+Math.random()*140);
+    })();
+  }
+  function settle(g){
+    const v=g.dataset.verd;g.classList.remove('running');g.classList.add('done',v);
+    g.querySelector('.obs').textContent=g.dataset.obs;
+    if(v==='pass'){g.querySelector('.ic').textContent='✓';g.querySelector('.verd').textContent='PASS';}
+    else{g.querySelector('.ic').textContent='✕';g.querySelector('.verd').textContent='FAIL';}
+  }
+</script>
+</body>
+</html>
