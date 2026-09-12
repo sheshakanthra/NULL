@@ -49,7 +49,8 @@ from null.data.ohlcv import load_bars
 from null.leakage.audit import LeakageReport, audit_leakage
 from null.partition.walkforward import walk_forward_consistency, walk_forward_splits
 from null.report.render import write_report
-from null.stats.deflated_sharpe import deflated_sharpe_ratio
+from null.metrics import compute_metrics
+from null.stats.deflated_sharpe import DSRResult, deflated_sharpe_ratio
 from null.stats.mtrl import minimum_track_record_length
 from null.stats.pbo import compute_pbo
 from null.stats.reality_check import reality_check
@@ -250,6 +251,79 @@ def write_verdict(verdict: Verdict, path: Path) -> Path | None:
     )
     path.write_bytes(slimmed.canonical_json())
     return trials_path
+
+
+def write_evidence_sidecar(
+    evidence: Evidence, dsr: DSRResult, path: Path
+) -> Path:
+    """Write ``evidence.json``: the scalar figures, without the curves.
+
+    ``verdict.json`` carries the gates, the hash and the StrategyRun -- it is the
+    judgement, not the measurements. The numbers behind the judgement (CAGR,
+    drawdown, the gross basis, the DSR block) live only in ``Evidence``, which is
+    never serialised, so anything downstream had to scrape them out of gate
+    rationale prose. This is that, done properly: the same values, as keys.
+
+    Scalars only. The four Series on Evidence are ~817KB and nothing reading this
+    file wants them; they stay in the parquet artifacts.
+
+    ``evidence_hash`` is included so a reader can tie this file to the verdict it
+    came from. Two files that disagree are then detectable rather than silently
+    mismatched.
+    """
+    gross = compute_metrics(
+        evidence.gross_returns,
+        basis="gross",
+        turnover_annual=evidence.turnover_annual,
+        time_in_market=evidence.time_in_market,
+    )
+
+    payload = {
+        "evidence_hash": evidence.content_hash(),
+        "alpha": {
+            "alpha_annual": evidence.alpha.alpha_annual,
+            "alpha_tstat": evidence.alpha.alpha_tstat,
+            "beta": evidence.alpha.beta,
+            "hac_lags": evidence.alpha.hac_lags,
+            "se_method": evidence.alpha.se_method,
+        },
+        "benchmark_net": {
+            "cagr": evidence.benchmark_metrics.cagr,
+            "max_drawdown": evidence.benchmark_metrics.max_drawdown,
+            "sharpe": evidence.benchmark_metrics.sharpe,
+        },
+        "deflated_sharpe": {
+            "deflated_sharpe": dsr.deflated_sharpe,
+            # Named apart on purpose. These differ by sqrt(252), and comparing the
+            # per-period one against observed_sharpe_annual reads as "the strategy
+            # matched what noise produces" when the truth is the opposite by an
+            # order of magnitude. A bare `expected_max_sharpe` invites exactly that.
+            "expected_max_sharpe_annual": dsr.expected_max_sharpe_annual,
+            "expected_max_sharpe_perperiod": dsr.expected_max_sharpe,
+            "kurtosis_full_not_excess": dsr.kurtosis,
+            "n_trials": dsr.n_trials,
+            "observed_sharpe_annual": dsr.observed_sharpe_annual,
+            "skew": dsr.skew,
+            "variance_was_assumed": dsr.variance_was_assumed,
+        },
+        "strategy_gross": {
+            "cagr": gross.cagr,
+            "sharpe": gross.sharpe,
+        },
+        "strategy_net": {
+            "cagr": evidence.metrics.cagr,
+            "max_drawdown": evidence.metrics.max_drawdown,
+            "n_obs": evidence.metrics.n_obs,
+            "sharpe": evidence.metrics.sharpe,
+            "vol_annual": evidence.metrics.vol_annual,
+        },
+    }
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return path
 
 
 def build_evidence(
@@ -564,6 +638,11 @@ def run_audit_command(args: argparse.Namespace) -> int:
 
     out.mkdir(parents=True, exist_ok=True)
     trials_path = write_verdict(report.verdict, verdict_path)
+    evidence_path = write_evidence_sidecar(
+        evidence,
+        dsr,  # type: ignore[arg-type]
+        out / "evidence.json",
+    )
     write_report(
         report,
         report_path,
@@ -582,6 +661,7 @@ def run_audit_command(args: argparse.Namespace) -> int:
     print(f"  {verdict_path}")
     if trials_path is not None:
         print(f"  {trials_path}")
+    print(f"  {evidence_path}")
     print(f"  {report_path}")
     return EXIT_PASS if report.verdict.result == "PASS" else EXIT_REJECT
 

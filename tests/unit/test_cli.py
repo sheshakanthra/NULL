@@ -263,8 +263,8 @@ def test_two_invocations_produce_byte_identical_artifacts(
     assert main(_argv(run_json, bars_parquet, first, benchmark=benchmark_parquet)) == EXIT_REJECT
     assert main(_argv(run_json, bars_parquet, second, benchmark=benchmark_parquet)) == EXIT_REJECT
 
-    assert (first / "verdict.json").read_bytes() == (second / "verdict.json").read_bytes()
-    assert (first / "report.html").read_bytes() == (second / "report.html").read_bytes()
+    for name in ("verdict.json", "evidence.json", "report.html"):
+        assert (first / name).read_bytes() == (second / name).read_bytes(), name
 
 
 def test_two_invocations_are_byte_identical_in_the_trials_parquet_too(
@@ -284,7 +284,12 @@ def test_two_invocations_are_byte_identical_in_the_trials_parquet_too(
         argv += ["--trials-parquet", str(trials_path)]
         main(argv)
 
-    for name in ("verdict.json", "verdict.trials.parquet", "report.html"):
+    for name in (
+        "verdict.json",
+        "verdict.trials.parquet",
+        "evidence.json",
+        "report.html",
+    ):
         assert (first / name).read_bytes() == (second / name).read_bytes(), name
 
 
@@ -780,3 +785,88 @@ def test_a_surface_with_no_peak_is_refused(
     argv = _argv(run_json, bars_parquet, out, benchmark=benchmark_parquet)
     argv += ["--sensitivity", str(path)]
     assert main(argv) == EXIT_USAGE
+
+
+# ---------------------------------------------------------------------------
+# evidence.json: the scalars behind the judgement, as keys rather than prose
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_sidecar_carries_the_figures_the_verdict_does_not(
+    run_json, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    """verdict.json is the judgement; these are the measurements behind it.
+
+    Each of these exists nowhere else as a key -- before the sidecar a reader had
+    to scrape them out of gate rationale prose.
+    """
+    out = tmp_path / "sidecar"
+    main(_argv(run_json, bars_parquet, out, benchmark=benchmark_parquet))
+    ev = json.loads((out / "evidence.json").read_text())
+
+    assert set(ev["strategy_gross"]) == {"cagr", "sharpe"}
+    assert set(ev["strategy_net"]) == {
+        "cagr", "sharpe", "max_drawdown", "vol_annual", "n_obs",
+    }
+    assert set(ev["benchmark_net"]) == {"cagr", "sharpe", "max_drawdown"}
+    assert set(ev["alpha"]) == {
+        "alpha_annual", "alpha_tstat", "beta", "se_method", "hac_lags",
+    }
+    assert ev["alpha"]["se_method"] in ("newey_west", "ols")
+
+    verdict = json.loads((out / "verdict.json").read_text())
+    assert ev["evidence_hash"] == verdict["evidence_hash"], (
+        "the sidecar must be tied to the verdict it came from"
+    )
+
+
+def test_the_two_expected_max_sharpe_fields_cannot_be_confused(
+    run_json, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    """The per-period and annual figures differ by sqrt(252).
+
+    Reading the per-period one against observed_sharpe_annual inverts the finding:
+    it reads as "the strategy matched what noise produces" when the truth is that
+    noise produces an order of magnitude more. Neither may be named bare.
+    """
+    out = tmp_path / "units"
+    main(_argv(run_json, bars_parquet, out, benchmark=benchmark_parquet))
+    block = json.loads((out / "evidence.json").read_text())["deflated_sharpe"]
+
+    assert "expected_max_sharpe" not in block, "an unqualified name invites the mixup"
+    assert "expected_max_sharpe_annual" in block
+    assert "expected_max_sharpe_perperiod" in block
+
+    # Stated multiplicatively so it holds for this fixture too: n_trials=1 means
+    # no selection effect, so both figures are legitimately zero here. The
+    # distinctness on real data is asserted against the committed artifact below.
+    assert block["expected_max_sharpe_annual"] == pytest.approx(
+        block["expected_max_sharpe_perperiod"] * np.sqrt(252), rel=1e-9, abs=1e-12
+    ), "the annual field must be the per-period one annualised"
+
+    # observed is annual, so only the annual expected-max is comparable to it
+    assert "observed_sharpe_annual" in block
+    assert "observed_sharpe" not in block
+
+
+def test_the_committed_artifact_keeps_the_two_expected_max_figures_far_apart() -> None:
+    """On real evidence the two differ by ~16x. This is the case the naming exists
+    for: a page that grabbed the per-period figure would report that noise produces
+    about what the strategy produced, inverting the finding."""
+    committed = REPO / "examples" / "rsi2_nifty" / "audit_out" / "evidence.json"
+    block = json.loads(committed.read_text())["deflated_sharpe"]
+
+    perperiod = block["expected_max_sharpe_perperiod"]
+    annual = block["expected_max_sharpe_annual"]
+    observed = block["observed_sharpe_annual"]
+
+    assert perperiod > 0.0 and annual > 0.0
+    assert annual == pytest.approx(perperiod * np.sqrt(252), rel=1e-9)
+    assert annual > 10.0 * observed, (
+        "the real finding is that noise alone produces an order of magnitude more "
+        "than the candidate showed"
+    )
+    assert perperiod < observed, (
+        "and the per-period figure sits BELOW the observed annual Sharpe, which is "
+        "exactly how confusing the two would flip the page's headline claim"
+    )

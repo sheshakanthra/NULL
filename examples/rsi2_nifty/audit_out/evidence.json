@@ -1,0 +1,36 @@
+{
+  "alpha": {
+    "alpha_annual": 0.0349240387382,
+    "alpha_tstat": 1.57945991651,
+    "beta": -0.00649914717358,
+    "hac_lags": 8,
+    "se_method": "newey_west"
+  },
+  "benchmark_net": {
+    "cagr": 0.132507239862,
+    "max_drawdown": 0.594951647872,
+    "sharpe": 0.684035320824
+  },
+  "deflated_sharpe": {
+    "deflated_sharpe": 5.44208772203e-111,
+    "expected_max_sharpe_annual": 6.52450984864,
+    "expected_max_sharpe_perperiod": 0.411005487764,
+    "kurtosis_full_not_excess": 69.0458079037,
+    "n_trials": 108,
+    "observed_sharpe_annual": 0.421788221529,
+    "skew": -3.08376616813,
+    "variance_was_assumed": false
+  },
+  "evidence_hash": "3f40aa2efda9a4773c7239b5a84b1a0ba75b73b9146dbeba856dd46f018bc4b2",
+  "strategy_gross": {
+    "cagr": 0.077401118645,
+    "sharpe": 0.952482645445
+  },
+  "strategy_net": {
+    "cagr": 0.0316190656772,
+    "max_drawdown": 0.304478533312,
+    "n_obs": 3700,
+    "sharpe": 0.421788221529,
+    "vol_annual": 0.0818355107743
+  }
+}

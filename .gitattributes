@@ -5,6 +5,7 @@
 # whose bytes differ from the one the pipeline produces, and "byte-identical"
 # stops being checkable by anyone who cloned.
 examples/rsi2_nifty/audit_out/verdict.json   -text
+examples/rsi2_nifty/audit_out/evidence.json  -text
 examples/rsi2_nifty/audit_out/report.html    -text
 
 # Parquet is binary. Git usually detects this, but the reference caches and the
