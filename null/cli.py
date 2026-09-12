@@ -43,6 +43,7 @@ from null.contracts import (
 from null.costs.india_equity import IndiaEquityCostModel
 from null.costs.robustness import load_rate_robustness
 from null.data.ohlcv import DEFAULT_CACHE as OHLCV_CACHE
+from null.benchmark.tri import DEFAULT_CACHE as DEFAULT_TRI_CACHE
 from null.benchmark.tri import load_nifty50_tri
 from null.data.ohlcv import load_bars
 from null.leakage.audit import LeakageReport, audit_leakage
@@ -164,6 +165,7 @@ def build_evidence(
     benchmark_bars: tuple[Bar, ...],
     costs: IndiaEquityCostModel,
     cost_robustness_path: Path | None = None,
+    benchmark_is_total_return: bool = False,
 ) -> tuple[Evidence, dict[str, object]]:
     """Assemble the Evidence the gates consume, plus the report context.
 
@@ -263,7 +265,7 @@ def build_evidence(
 
     context: dict[str, object] = {
         "rates_are_verified": costs.config.rates_are_verified,
-        "benchmark_is_total_return": False,
+        "benchmark_is_total_return": benchmark_is_total_return,
         "universe_is_point_in_time": False,
         "risk_free_supplied": False,
         "golden_suite_green": False,
@@ -280,13 +282,37 @@ def build_evidence(
     return evidence, context
 
 
-def _load_benchmark(path_arg: str | None) -> tuple[Bar, ...]:
-    """The benchmark series. Never the strategy's own bars.
+def _cached_tri_is_validated() -> bool:
+    """Whether the committed TRI cache carries a PASSING total-return validation.
+
+    Fails closed. The claim "this benchmark is total return" has to be backed by
+    evidence on disk -- the validation the fetcher recorded in the provenance
+    sidecar -- not by the fact that a particular code path was taken. No sidecar,
+    no validation block, or a failing one, all read as unconfirmed, and the
+    limitations band then says so.
+    """
+    sidecar = DEFAULT_TRI_CACHE.with_name("nifty50_tri.provenance.json")
+    if not sidecar.exists():
+        return False
+    try:
+        recorded = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    validation = recorded.get("tri_validation")
+    return isinstance(validation, dict) and validation.get("is_valid") is True
+
+
+def _load_benchmark(path_arg: str | None) -> tuple[tuple[Bar, ...], bool]:
+    """The benchmark series, and whether it is a confirmed total-return index.
 
     Defaulting to the audited bars would compare a strategy against itself, and for
     a multi-symbol universe it is not even a coherent series -- the timestamps
     interleave across symbols. There is no fallback here for the same reason
     null/benchmark/tri.py has none: a missing benchmark is a stop.
+
+    A caller-supplied series is never treated as total return: NULL has not seen it
+    validated, and assuming otherwise would silence the one limitation that catches
+    a price index being benchmarked against.
     """
     if path_arg:
         candidate = load_bars(Path(path_arg))
@@ -296,7 +322,7 @@ def _load_benchmark(path_arg: str | None) -> tuple[Bar, ...]:
                 f"{path_arg} holds {len(symbols)} symbols {sorted(symbols)}; the "
                 "benchmark must be a single series."
             )
-        return candidate
+        return candidate, False
 
     series = load_nifty50_tri()
     values = series.to_numpy()
@@ -315,7 +341,7 @@ def _load_benchmark(path_arg: str | None) -> tuple[Bar, ...]:
             adv_20=None,
         )
         for i, stamp in enumerate(series.ts)
-    )
+    ), _cached_tri_is_validated()
 
 
 def _leakage_only_verdict(run: StrategyRun, leakage: LeakageReport) -> Verdict:
@@ -383,7 +409,7 @@ def run_audit_command(args: argparse.Namespace) -> int:
     bars_path = Path(args.bars) if args.bars else OHLCV_CACHE
     try:
         bars = load_bars(bars_path, symbols=tuple(run.universe))
-        benchmark_bars = _load_benchmark(args.benchmark)
+        benchmark_bars, benchmark_is_tri = _load_benchmark(args.benchmark)
     except (FileNotFoundError, ValueError) as exc:
         raise InputError(str(exc)) from exc
 
@@ -420,6 +446,7 @@ def run_audit_command(args: argparse.Namespace) -> int:
             cost_robustness_path=(
                 Path(args.cost_robustness) if args.cost_robustness else None
             ),
+            benchmark_is_total_return=benchmark_is_tri,
         )
     except ValueError as exc:
         raise InputError(str(exc)) from exc
