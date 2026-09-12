@@ -33,14 +33,24 @@ from tests.golden.fixtures import SyntheticStrategy
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-#: Parts of Evidence the golden suite supplies rather than computes, because the
-#: pipeline stage that would produce them is not built. Named so nobody mistakes a
-#: green suite for end-to-end coverage.
+#: Parts of Evidence the GOLDEN SUITE supplies rather than computes. Named so
+#: nobody mistakes a green suite for end-to-end coverage.
+#:
+#: These are a property of the fixtures, not a gap in NULL. A golden fixture is a
+#: synthetic RETURN SERIES with a known right answer -- it has no bars, no parameter
+#: grid and no weights, so there is nothing for these stages to read. Every one of
+#: them IS computed from real inputs on the real audit path (null/cli.py), which is
+#: what examples/rsi2_nifty exercises end to end.
+#:
+#: Do not "fix" an entry here by wiring a stage in; the fixture has no input to wire.
+#: An entry leaves this list only if a fixture starts carrying the input it needs.
 SYNTHESISED = (
-    "walkforward fold returns (partition/walkforward.py is not wired into the "
-    "evidence build)",
-    "sensitivity surface (sensitivity/neighborhood.py does not exist)",
-    "max_adv_participation (computable from weights + Bar.adv_20, not yet wired)",
+    "walkforward fold returns (a fixture is one return series, not a set of "
+    "out-of-sample folds; the CLI computes these from real partitions)",
+    "sensitivity surface (a fixture has no parameter grid to be a neighbourhood "
+    "of; the CLI takes a real surface via --sensitivity)",
+    "max_adv_participation (a fixture has no weights and no Bar.adv_20; the CLI "
+    "computes participation from both)",
     "leakage flags (leakage/audit.py runs on bars; these fixtures are return series)",
 )
 
