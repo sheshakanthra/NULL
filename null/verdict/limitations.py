@@ -240,10 +240,10 @@ def _reviewed_market_events(
         severity="stated",
         text=(
             f"{count} large single-day price moves were accepted as genuine market "
-            "events by human review rather than being matched to a corporate action. "
-            "Each carries a checkable reason in configs/reviewed_market_events.csv "
-            "and is visible in git history. A human judged these; they were not "
-            "waived by configuration."
+            "events rather than being matched to a corporate action. Each carries a "
+            "checkable reason in configs/reviewed_market_events.csv, is visible in "
+            "git history, and has been human-confirmed against the historical "
+            "record by Sheshakanth. These were not waived by configuration."
         ),
     )
 
