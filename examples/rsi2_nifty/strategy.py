@@ -323,7 +323,12 @@ def run_grid(
     variants: tuple[GridVariant, ...] = ALL_VARIANTS,
 ) -> tuple[VariantResult, ...]:
     """Run every grid variant. RSI is computed once per (symbol, period), not once
-    per variant, since only 3 distinct periods exist across 108 variants."""
+    per variant -- the distinct periods are read off ``variants`` itself (three
+    of them across the real 108-variant grid), not assumed to be module-level
+    ``RSI_PERIODS``. A caller passing variants outside the module's own grid
+    (a service backtesting a caller-chosen period, say) must still get RSI
+    computed for the periods it actually asked for, not silently get an empty
+    ``rsi_by_symbol`` for anything outside {2, 3, 4}."""
     bars_by_symbol_raw: dict[str, list[Bar]] = {}
     for bar in bars:
         bars_by_symbol_raw.setdefault(bar.symbol, []).append(bar)
@@ -336,11 +341,12 @@ def run_grid(
         for s, v in bars_by_symbol.items()
     }
 
+    periods_needed = sorted({variant.period for variant in variants})
     rsi_cache: dict[tuple[str, int], npt.NDArray[np.float64]] = {}
     for symbol in universe:
         if symbol not in closes_by_symbol:
             continue
-        for period in RSI_PERIODS:
+        for period in periods_needed:
             rsi_cache[(symbol, period)] = compute_rsi(closes_by_symbol[symbol], period)
 
     effective_universe = tuple(s for s in universe if s in bars_by_symbol)
