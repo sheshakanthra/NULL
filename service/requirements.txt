@@ -1,0 +1,12 @@
+# The repo itself, installed as a package -- service/app.py does `import null`
+# directly and must never reimplement audit logic. Editable: this directory
+# runs from a checkout, not a wheel build step.
+-e ..
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# fastapi.testclient.TestClient needs httpx directly since fastapi 0.100 --
+# only used by tests/service/, but it's cheap and this file is the one place
+# a fresh checkout learns it's needed.
+httpx>=0.27
