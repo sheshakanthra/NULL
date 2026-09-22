@@ -22,3 +22,14 @@ dist/
 .venv/
 venv/
 .env
+
+# `null audit`'s default --out is ".", so a manual run from the repo root
+# writes verdict.json / evidence.json / report.html / verdict.trials.parquet
+# straight into the root. A stray one of these is not clutter -- it's an
+# audit artifact of unknown provenance sitting next to the committed ones,
+# and a wrong-hash file left there is an integrity hazard, not a convenience.
+# Anchored to root only: examples/, service/, and site/ each commit their own
+# json/html/parquet audit outputs on purpose and are untouched by this.
+/*.json
+/*.html
+/*.parquet
