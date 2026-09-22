@@ -12,16 +12,16 @@
     "sharpe": 0.684035320824
   },
   "deflated_sharpe": {
-    "deflated_sharpe": 5.44208772203e-111,
-    "expected_max_sharpe_annual": 6.52450984864,
-    "expected_max_sharpe_perperiod": 0.411005487764,
+    "deflated_sharpe": 0.515753245145,
+    "expected_max_sharpe_annual": 0.411005487764,
+    "expected_max_sharpe_perperiod": 0.0258909120978,
     "kurtosis_full_not_excess": 69.0458079037,
     "n_trials": 108,
     "observed_sharpe_annual": 0.421788221529,
     "skew": -3.08376616813,
     "variance_was_assumed": false
   },
-  "evidence_hash": "3f40aa2efda9a4773c7239b5a84b1a0ba75b73b9146dbeba856dd46f018bc4b2",
+  "evidence_hash": "baff7b685ddcace89b71c6fb3d93182c992c8362b0c4d28889896bead3e498a9",
   "strategy_gross": {
     "cagr": 0.077401118645,
     "sharpe": 0.952482645445

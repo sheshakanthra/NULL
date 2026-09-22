@@ -164,6 +164,76 @@ failing — never the best available number.
 
 ---
 
+## 7. A grid runner that only knew its own three periods
+
+`run_grid` accepted a `variants` parameter — any tuple of `GridVariant`s, in principle
+from any caller — but precomputed RSI only for the module-level `RSI_PERIODS` constant,
+`(2, 3, 4)`. A variant outside that set got an empty `rsi_by_symbol` and a `KeyError`
+out of `run_variant`.
+
+It never fired, because every caller before this one — `build_run.py`'s real
+108-variant grid, and every test slicing `ALL_VARIANTS` — only ever used periods 2, 3,
+and 4. The parameter existed and was exercised; the assumption behind it was not. Found
+while building the live-audit service's bounded RSI(2) backtester
+(`service/backtest/rsi2.py`), the first caller to ever pass a period outside the
+committed grid.
+
+Fixed by deriving the periods to precompute from the variants actually passed in,
+rather than the module constant — no behaviour change for the default grid (verified:
+regenerating `run.json` and `sensitivity.json` from scratch through the fixed function
+reproduces the committed bytes exactly).
+
+## 8. The per-period/annualised Sharpe confusion, caught once, fixed in one of two places
+
+Item 5's README already tells this story once: `deflated_sharpe_ratio` annualises its
+`trial_sharpes` input internally, so feeding it already-annualised values
+double-annualises the variance across trials — the first pass at
+`examples/rsi2_nifty/build_run.py`'s own diagnostic did exactly that, reporting an
+expected-max-Sharpe of 6.5 that appeared to swamp the observed 0.42 outright. It was
+caught, and `per_period_trial_sharpes()` was written to compute the correct per-period
+figure directly from each variant's raw returns.
+
+That fix lived in the example script's own standalone diagnostic. It never reached
+`null/cli.py`'s `build_evidence` — the function every real `null audit` invocation
+actually calls. `build_evidence` built `trial_sharpes` from each trial's declared,
+already-annualised `TrialRecord.sharpe` and passed it straight through, unconverted.
+The **committed golden artifact** — `examples/rsi2_nifty/audit_out/`, REJECT, the
+artifact `BUILD.md` M7 marked DONE — carried the bug: `expected_max_sharpe_annual`
+6.52 against an observed 0.42, `deflated_sharpe` collapsed to `5.4e-111` (prints as
+0.00), instead of the correct 0.41 and 0.52.
+
+A test already existed that *looked at* these two numbers —
+`test_the_committed_artifact_keeps_the_two_expected_max_figures_far_apart` — and
+passed, because it asserted the bug's own output as the expected shape: that
+`expected_max_sharpe_annual` sits **more than 10x** `observed_sharpe_annual`. It was
+written to guard against confusing the per-period and annual fields, and it did that
+correctly, while separately encoding the wrong magnitude as fact. A test that checks
+internal consistency (`annual == perperiod * sqrt(252)`) cannot catch an input that
+was wrong before either field was computed.
+
+**The REJECT verdict never depended on it.** `deflated_sharpe`'s gate threshold is
+0.95; 0.00 and the correct 0.52 both fail it, and the audit stayed REJECT with the
+same four failing gates before and after. What was wrong was the number itself — the
+one CLAUDE.md calls the product, printed into `GateResult.rationale`,
+`evidence.json`, and the rendered report — not the pass/fail decision built on it.
+Found by the live-audit service's `/audit/rsi2` endpoint reproducing the committed
+grid and its numbers looking implausible next to the README's own long-published
+0.516/0.411 figures from the (correct) standalone diagnostic.
+
+Fixed by lifting the one correct implementation —
+`null/stats/deflated_sharpe.py` gained `per_period_sharpe` and
+`per_period_trial_sharpes`, and `deflated_sharpe_ratio`'s own internal `observed_sharpe`
+now routes through the same function — so `null/cli.py`'s `build_evidence` and
+`examples/rsi2_nifty/build_run.py` both call the identical primitive instead of each
+carrying their own copy of "mean over sample std". Two independent copies of this
+arithmetic is exactly how one got fixed and the other didn't; there is now one.
+
+The committed artifact was regenerated and its `evidence_hash` changed
+(`3f40aa2efda9a477…` → `baff7b685ddcace8…`) — deliberately, the golden-fixture protocol
+working as intended: a documented reason, a re-verified verdict, not a silent update.
+
+---
+
 ## The pattern
 
 **Items 2 and 4 are the same shape.** In both, a test covering the defective path
@@ -173,6 +243,13 @@ failing — never the best available number.
 |---|---|---|
 | **2** | constant-weight benchmark fixtures | a constant weight is identical under both alignments |
 | **4** | the TRI parquet round-trip test | skipped, because the data it needed did not exist |
+
+**Item 8 is the same shape from a different angle.** There, the test wasn't inert — it
+actively asserted the bug's own output as correct, because the one thing it checked
+(`annual == perperiod * sqrt(252)`) is an internal identity that holds regardless of
+whether the *inputs* were ever right. Two independent copies of the same arithmetic,
+one fixed and one not, is also items 2/4's shape one level up: a correction made in one
+place is not evidence the same correction reached every place that needed it.
 
 A test that cannot fail is not coverage. Both were fixed the same way — by making
 the path exercisable **without the condition that made the test inert**:

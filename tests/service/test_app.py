@@ -22,10 +22,13 @@ COMMITTED_VERDICT = (
     REPO_ROOT / "examples" / "rsi2_nifty" / "audit_out" / "verdict.json"
 )
 
-# Pinned per the phase spec: "REJECT, 4 gates fail, same evidence_hash
-# 3f40aa2e…". A literal pin here catches the committed artifact itself
-# drifting silently, on top of the dynamic comparison below.
-PINNED_HASH_PREFIX = "3f40aa2e"
+# Pinned per docs/findings.md #8: the artifact was regenerated after fixing
+# null/cli.py's build_evidence() (it was feeding annualised trial Sharpes
+# into a per-period-expecting deflated_sharpe_ratio). REJECT and all four
+# failing gates held; only the DSR numbers and this hash moved. A literal pin
+# here catches the committed artifact itself drifting silently, on top of the
+# dynamic comparison below.
+PINNED_HASH_PREFIX = "baff7b68"
 
 client = TestClient(app)
 

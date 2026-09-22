@@ -465,7 +465,7 @@ Verdict **REJECT** on `rsi2_nifty50`, all seven gates judged, none `NOT_COMPUTAB
 |---|---|
 | `leakage_clean` | PASS |
 | `beats_benchmark_net` | FAIL — 3.16% CAGR net against 13.25% benchmark; alpha t-stat 1.58 (Newey-West, 8 lags) against a threshold of 2.0 |
-| `deflated_sharpe` | FAIL — 0.00 against 0.95 |
+| `deflated_sharpe` | FAIL — 0.52 against 0.95 |
 | `reality_check` | FAIL — p = 0.977 against 0.050 |
 | `walkforward_consistency` | PASS — net-positive in 4 of 5 out-of-sample folds |
 | `sensitivity_plateau` | PASS — neighbourhood mean Sharpe 77% of peak (0.32 against 0.42), threshold 60% |
@@ -478,13 +478,37 @@ annualised gap 1.5170% against the published 1.35%).
 Artifacts in `examples/rsi2_nifty/audit_out/`. `verdict.json` splits its per-trial return
 series into the sibling `verdict.trials.parquet`, the same split `run.json` uses, which
 takes the JSON from 18.7MB to 1.4MB. Both files plus `report.html` are byte-identical
-across runs; `evidence_hash 3f40aa2efda9a477…`.
+across runs; `evidence_hash baff7b685ddcace8…`.
 
 **Note the shape of this REJECT.** The strategy passes on plateau and walk-forward and
 still dies — it is not curve-fit to a spike and its result is not carried by one fold. It
 fails because after real costs against a real total-return benchmark it does not clear
 the market, and what outperformance there is (p = 0.977) is what chance produces on this
 history. That is the intended kill: not a harness artifact, and not a parameter accident.
+
+### DSR correction — annualised trial Sharpes fed to a per-period calculation *(settled; not an open question)*
+
+The `deflated_sharpe` row above originally read `FAIL — 0.00 against 0.95`, and the
+committed artifact's `evidence_hash` was `3f40aa2efda9a477…`. Both were wrong, found by
+the live-audit-service build stress-testing this exact path
+(`docs/findings.md` #8): `null/cli.py`'s `build_evidence` fed each trial's
+**annualised** `TrialRecord.sharpe` straight into `deflated_sharpe_ratio`, which
+annualises its `trial_sharpes` input internally — the identical per-period/annualised
+confusion `examples/rsi2_nifty/build_run.py`'s own standalone diagnostic had already
+caught and fixed (its README's "A correction, on the record"), except that fix never
+reached the CLI path every real audit runs through. The result: `expected_max_sharpe_annual`
+came out at **6.52** — fifteen times `observed_sharpe_annual` (0.42) — instead of the
+correct **0.41**, and `deflated_sharpe` collapsed to numerically zero instead of **0.52**.
+
+**The REJECT verdict did not depend on the bug.** `deflated_sharpe` fails the `>0.95`
+threshold either way (0.00 and 0.52 are both well under it), and all four failing gates
+are unchanged, byte-for-byte identical on every other field. What moved is the number
+itself — the one CLAUDE.md calls the product — and the `evidence_hash`, deliberately, once
+the code was fixed and the artifact regenerated. Fixed in `null/stats/deflated_sharpe.py`
+(a shared `per_period_sharpe`/`per_period_trial_sharpes` primitive, now the one place this
+arithmetic is allowed to live) and `null/cli.py`'s `build_evidence`; both
+`examples/rsi2_nifty/build_run.py` and `null/cli.py` now route through the same function,
+so it cannot diverge a third time.
 
 ### Spec correction — the fourth holding-cap value *(settled; not an open question)*
 

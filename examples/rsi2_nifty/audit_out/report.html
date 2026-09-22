@@ -60,7 +60,7 @@ border-radius:3px;padding:1px 5px;margin-right:7px;text-transform:uppercase}
     <div>
       <h1>rsi2_nifty50</h1>
       <p class="sub mono">108 trials &middot; 3,700
-      observations &middot; evidence 3f40aa2efda9 &middot;
+      observations &middot; evidence baff7b685ddc &middot;
       spec 0.3.0</p>
     </div>
     <div class="badge reject">REJECT</div>
@@ -70,7 +70,7 @@ border-radius:3px;padding:1px 5px;margin-right:7px;text-transform:uppercase}
     <div class="card"><div class="k">Observed Sharpe</div>
       <div class="v mono">0.42</div></div>
     <div class="card"><div class="k">Deflated Sharpe</div>
-      <div class="v mono">0.00</div></div>
+      <div class="v mono">0.52</div></div>
     <div class="card"><div class="k">Alpha t-stat</div>
       <div class="v mono">1.58</div></div>
   </div>
@@ -78,7 +78,7 @@ border-radius:3px;padding:1px 5px;margin-right:7px;text-transform:uppercase}
   <h2>Gates</h2>
 <div class="gate pass"><span class="icon">✓</span><span class="name">leakage_clean</span><span class="cmp mono">0 vs no fatal leakage flags</span></div>
 <div class="gate fail"><span class="icon">✗</span><span class="name">beats_benchmark_net</span><span class="cmp mono">1.579 vs 2</span></div>
-<div class="gate fail"><span class="icon">✗</span><span class="name">deflated_sharpe</span><span class="cmp mono">5.442e-111 vs 0.95</span></div>
+<div class="gate fail"><span class="icon">✗</span><span class="name">deflated_sharpe</span><span class="cmp mono">0.5158 vs 0.95</span></div>
 <div class="gate fail"><span class="icon">✗</span><span class="name">reality_check</span><span class="cmp mono">0.977 vs 0.05</span></div>
 <div class="gate pass"><span class="icon">✓</span><span class="name">walkforward_consistency</span><span class="cmp mono">0.8 vs 0.6</span></div>
 <div class="gate pass"><span class="icon">✓</span><span class="name">sensitivity_plateau</span><span class="cmp mono">0.7702 vs 0.6</span></div>
@@ -86,10 +86,10 @@ border-radius:3px;padding:1px 5px;margin-right:7px;text-transform:uppercase}
 
   <h2>Why it failed</h2>
 <p class="fail"><span class="g">beats_benchmark_net</span>No alpha over buy-and-hold after costs. Strategy returned 3.16% CAGR net of everything against 13.25% for the benchmark, beta -0.01. Annualised alpha 3.49% with a t-stat of 1.58 (Newey-West, 8 lags) over 3,700 observations; threshold is 2.0, and alpha with a t-stat below 2 is not alpha.</p>
-<p class="fail"><span class="g">deflated_sharpe</span>The probability the true Sharpe exceeds zero, after adjusting for how many variants were tried and for the shape of the return distribution, is 0.00 against a threshold of 0.95. Adjusted for selection, this is a search finding noise.</p>
+<p class="fail"><span class="g">deflated_sharpe</span>The probability the true Sharpe exceeds zero, after adjusting for how many variants were tried and for the shape of the return distribution, is 0.52 against a threshold of 0.95. Adjusted for selection, this is a search finding noise.</p>
 <p class="fail"><span class="g">reality_check</span>Bootstrapping the null that the best candidate does not beat the benchmark, using a stationary bootstrap so autocorrelation survives resampling, gives p = 0.977 against a threshold of 0.050. The outperformance is within what chance produces on this history.</p>
 <p class="fail"><span class="g">capacity</span>The largest single order would consume 5.1% of 20-day average daily traded value, against a tolerance of 5.0%. An order this size does not execute at the prices the backtest assumed; the returns shown are not attainable at this capital.</p>
-<p><span class="g">selection diagnostic</span>With 108 trials over 3,700 observations, noise alone is expected to produce a maximum Sharpe of 6.52; the candidate showed 0.42, so the search cannot distinguish this edge from luck.</p>
+<p><span class="g">selection diagnostic</span>With 108 trials over 3,700 observations, noise alone is expected to produce a maximum Sharpe of 0.41; the candidate showed 0.42, so the observed result clears what luck alone would produce.</p>
 
   <h2>Evidence panels</h2>
   <p class="note">These are reported for context and <strong>do not vote</strong>
