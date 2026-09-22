@@ -36,6 +36,8 @@ __all__ = [
     "DSRResult",
     "deflated_sharpe_ratio",
     "expected_max_sharpe",
+    "per_period_sharpe",
+    "per_period_trial_sharpes",
     "probabilistic_sharpe_ratio",
 ]
 
@@ -75,6 +77,48 @@ class DSRResult(NullModel):
     rationale: NonEmptyStr
     selection_diagnostic: NonEmptyStr
     """One sentence, worth more to a reader than the PBO number."""
+
+
+def per_period_sharpe(returns: npt.NDArray[np.float64]) -> float:
+    """Per-period (NOT annualised) Sharpe: mean over sample std (ddof=1), 0.0
+    for a degenerate (zero-variance) series.
+
+    This is the one true definition every per-period Sharpe in this codebase
+    must route through -- including ``deflated_sharpe_ratio``'s own
+    ``observed_sharpe`` below. A second, hand-rolled copy of this arithmetic
+    at a call site is exactly how the annualised/per-period confusion
+    described in ``per_period_trial_sharpes`` happened: one copy got fixed
+    (``examples/rsi2_nifty/build_run.py``), the other (``null/cli.py``)
+    silently kept feeding this function's caller an annualised value instead.
+    See docs/findings.md #8.
+    """
+    sd = float(np.std(returns, ddof=1))
+    return float(np.mean(returns) / sd) if sd > 0.0 else 0.0
+
+
+def per_period_trial_sharpes(
+    trial_returns: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """Per-period Sharpe for each column of a ``(n_obs, n_trials)`` return
+    matrix -- what ``deflated_sharpe_ratio``'s ``trial_sharpes`` parameter
+    needs.
+
+    Not each trial's own possibly-annualised, caller-declared ``sharpe``
+    (``TrialRecord.sharpe``, or a variant's own reported Sharpe): this
+    function annualises internally, on the same basis as the candidate's own
+    ``observed_sharpe``, so feeding it an already-annualised input
+    double-annualises the variance across trials and inflates
+    ``expected_max_sharpe_annual`` by a further ``sqrt(periods_per_year)`` on
+    top. See ``examples/rsi2_nifty/README.md``, "A correction, on the
+    record," for the 6.5-vs-0.77 confusion this produced the first time it
+    was fed the wrong unit, and docs/findings.md #8 for the same bug found a
+    second time, in ``null/cli.py``'s own audit path.
+    """
+    matrix = np.asarray(trial_returns, dtype=np.float64)
+    return np.asarray(
+        [per_period_sharpe(matrix[:, i]) for i in range(matrix.shape[1])],
+        dtype=np.float64,
+    )
 
 
 def probabilistic_sharpe_ratio(
@@ -181,8 +225,7 @@ def deflated_sharpe_ratio(
     if n_obs < 2:
         raise ValueError(f"need at least 2 observations, got {n_obs}")
 
-    sd = float(np.std(r, ddof=1))
-    sr = float(np.mean(r) / sd) if sd > 0.0 else 0.0
+    sr = per_period_sharpe(r)
     skew = float(stats.skew(r, bias=False)) if n_obs > 2 else 0.0
     kurt = float(stats.kurtosis(r, fisher=False, bias=False)) if n_obs > 3 else 3.0
 

@@ -9,6 +9,8 @@ from null.stats.deflated_sharpe import (
     DEFAULT_ASSUMED_TRIAL_SHARPE_VARIANCE,
     deflated_sharpe_ratio,
     expected_max_sharpe,
+    per_period_sharpe,
+    per_period_trial_sharpes,
     probabilistic_sharpe_ratio,
 )
 
@@ -168,3 +170,51 @@ def test_psr_is_bounded_to_a_probability() -> None:
             observed_sharpe=sr, benchmark_sharpe=0.0, n_obs=1000, skew=0.0, kurtosis=3.0
         )
         assert 0.0 <= p <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# per_period_sharpe / per_period_trial_sharpes -- docs/findings.md #8. The one
+# place this arithmetic is allowed to live; every caller needing a per-period
+# Sharpe (deflated_sharpe_ratio's own `observed_sharpe`, null/cli.py's
+# build_evidence, examples/rsi2_nifty/build_run.py) routes through it, so it
+# cannot silently diverge into an annualised copy a second time.
+# ---------------------------------------------------------------------------
+
+
+def test_per_period_sharpe_matches_a_known_value() -> None:
+    rng = np.random.default_rng(11)
+    raw = rng.normal(0.0, 1.0, 500)
+    raw = (raw - raw.mean()) / raw.std(ddof=1)
+    values = raw * 0.01 + 0.05 * 0.01  # constructed per-period Sharpe of 0.05
+    assert per_period_sharpe(values) == pytest.approx(0.05, abs=1e-9)
+
+
+def test_per_period_sharpe_is_not_annualised() -> None:
+    """Emphatically not the annualised value -- the exact confusion this
+    function exists to prevent (docs/findings.md #8)."""
+    rng = np.random.default_rng(11)
+    raw = rng.normal(0.0, 1.0, 500)
+    raw = (raw - raw.mean()) / raw.std(ddof=1)
+    values = raw * 0.01 + 0.05 * 0.01
+    result = per_period_sharpe(values)
+    assert result != pytest.approx(0.05 * np.sqrt(252), rel=0.5)
+
+
+def test_per_period_sharpe_is_zero_for_a_degenerate_series() -> None:
+    assert per_period_sharpe(np.zeros(50)) == 0.0
+
+
+def test_per_period_trial_sharpes_maps_each_column_through_per_period_sharpe() -> None:
+    rng = np.random.default_rng(13)
+    targets = (0.05, -0.02, 0.10)
+    columns = []
+    for target in targets:
+        raw = rng.normal(0.0, 1.0, 400)
+        raw = (raw - raw.mean()) / raw.std(ddof=1)
+        columns.append(raw * 0.01 + target * 0.01)
+    matrix = np.column_stack(columns)
+
+    result = per_period_trial_sharpes(matrix)
+    expected = np.array([per_period_sharpe(matrix[:, i]) for i in range(matrix.shape[1])])
+    assert result == pytest.approx(expected)
+    assert result == pytest.approx(np.array(targets), abs=1e-9)

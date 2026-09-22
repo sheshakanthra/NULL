@@ -49,6 +49,7 @@ from null.costs.india_equity import IndiaEquityCostModel
 from null.data.ohlcv import DEFAULT_CACHE as OHLCV_CACHE
 from null.data.ohlcv import load_bars
 from null.stats.deflated_sharpe import deflated_sharpe_ratio
+from null.stats.deflated_sharpe import per_period_sharpe as _per_period_sharpe
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -84,12 +85,17 @@ def per_period_trial_sharpes(results: tuple) -> np.ndarray:
     ``deflated_sharpe_ratio`` annualises internally; feeding it already-annualised
     trial Sharpes double-annualises the variance across trials. See the comment at
     the call site in ``main()`` for how that was caught.
+
+    Delegates to ``null.stats.deflated_sharpe.per_period_sharpe`` -- the same
+    primitive ``null/cli.py``'s own ``build_evidence`` now uses -- rather than
+    a second, hand-rolled copy of the mean/std arithmetic. Two independent
+    copies of "compute a per-period Sharpe" is exactly how this bug happened
+    the first time: one got fixed here, the other (``null/cli.py``) silently
+    kept the wrong unit for a full milestone before docs/findings.md #8 found
+    it a second time.
     """
     return np.asarray(
-        [
-            float(np.mean(vals) / np.std(vals, ddof=1)) if np.std(vals, ddof=1) > 0.0 else 0.0
-            for vals in (r.net_returns.to_numpy() for r in results)
-        ],
+        [_per_period_sharpe(r.net_returns.to_numpy()) for r in results],
         dtype=np.float64,
     )
 

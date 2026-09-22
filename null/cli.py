@@ -50,7 +50,12 @@ from null.leakage.audit import LeakageReport, audit_leakage
 from null.partition.walkforward import walk_forward_consistency, walk_forward_splits
 from null.report.render import write_report
 from null.metrics import compute_metrics
-from null.stats.deflated_sharpe import DSRResult, deflated_sharpe_ratio
+from null.stats.deflated_sharpe import (
+    TRADING_DAYS,
+    DSRResult,
+    deflated_sharpe_ratio,
+    per_period_trial_sharpes,
+)
 from null.stats.mtrl import minimum_track_record_length
 from null.stats.pbo import compute_pbo
 from null.stats.reality_check import reality_check
@@ -359,11 +364,24 @@ def build_evidence(
     if len(supplied) >= 2:
         width = min(len(s) for s in supplied)
         trial_returns = np.column_stack([s.to_numpy()[:width] for s in supplied])
-        trial_sharpes = np.asarray(
-            [t.sharpe for t in run.trials if t.returns is not None], dtype=np.float64
-        )
+        # Computed directly from each trial's own per-period returns -- NOT
+        # from the declared TrialRecord.sharpe, whose units are undocumented
+        # on the contract and which every producer in this repo populates
+        # ANNUALISED. deflated_sharpe_ratio annualises internally, so feeding
+        # it an annualised trial_sharpes double-annualises the variance
+        # across trials. docs/findings.md #8.
+        trial_sharpes = per_period_trial_sharpes(trial_returns)
     elif run.trials:
-        trial_sharpes = np.asarray([t.sharpe for t in run.trials], dtype=np.float64)
+        # No per-trial return series to compute from directly -- the only
+        # evidence available is each trial's declared, caller-supplied
+        # `sharpe`, which by the same repo-wide convention is annualised.
+        # Converted to per-period so it lands on the basis
+        # deflated_sharpe_ratio expects; still weaker evidence than the
+        # branch above; docs/findings.md #8.
+        declared_annualised = np.asarray(
+            [t.sharpe for t in run.trials], dtype=np.float64
+        )
+        trial_sharpes = declared_annualised / np.sqrt(TRADING_DAYS)
 
     dsr = deflated_sharpe_ratio(
         returns=net, n_trials=run.n_trials, trial_sharpes=trial_sharpes

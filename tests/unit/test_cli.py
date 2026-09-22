@@ -849,10 +849,103 @@ def test_the_two_expected_max_sharpe_fields_cannot_be_confused(
     assert "observed_sharpe" not in block
 
 
-def test_the_committed_artifact_keeps_the_two_expected_max_figures_far_apart() -> None:
-    """On real evidence the two differ by ~16x. This is the case the naming exists
-    for: a page that grabbed the per-period figure would report that noise produces
-    about what the strategy produced, inverting the finding."""
+def test_build_evidence_feeds_deflated_sharpe_per_period_trial_sharpes_not_annualised(
+    run_json, bars_parquet, benchmark_parquet, tmp_path
+) -> None:
+    """docs/findings.md #8. ``deflated_sharpe_ratio`` annualises internally --
+    its ``trial_sharpes`` parameter must be per-period, the same basis as the
+    candidate's own ``observed_sharpe``. ``build_evidence`` was instead
+    feeding it ``TrialRecord.sharpe`` unconverted, which every producer in
+    this repo (``examples/rsi2_nifty/build_run.py``'s ``write_run_artifacts``)
+    stores ANNUALISED. That's the exact 6.5-vs-0.77 double-annualisation
+    confusion the README's "A correction, on the record" section describes
+    catching once already in the example script's own standalone diagnostic
+    -- the fix never reached ``null/cli.py``, the path every real audit
+    actually runs through.
+
+    Three trials, each with a return series of a KNOWN per-period Sharpe, and
+    a declared ``TrialRecord.sharpe`` set to that series' ANNUALISED Sharpe
+    (exactly how ``write_run_artifacts`` populates it) -- so the two
+    hypotheses (per-period vs annualised input) predict very different
+    ``expected_max_sharpe`` values, and the test can tell which one the code
+    actually used.
+    """
+    from null.stats.deflated_sharpe import TRADING_DAYS, expected_max_sharpe
+
+    frame = pd.read_parquet(bars_parquet)
+    stamps = sorted({d for d in frame["date"]})
+    localised = [
+        pd.Timestamp(s).replace(hour=15, minute=30).tz_localize(IST) for s in stamps
+    ]
+    n = len(localised) - 1
+    ann = float(np.sqrt(TRADING_DAYS))
+
+    rng = np.random.default_rng(7)
+    per_period_target = {"h0": 0.05, "h1": 0.03, "h2": -0.02}
+    trial_returns: dict[str, np.ndarray] = {}
+    for name, target in per_period_target.items():
+        raw = rng.normal(0.0, 1.0, n)
+        raw = (raw - raw.mean()) / raw.std(ddof=1)
+        trial_returns[name] = raw * 0.01 + target * 0.01
+
+    payload = json.loads(run_json.read_text())
+    payload["n_trials"] = 3
+    payload["trials"] = [
+        {"param_hash": name, "sharpe": target * ann}  # declared ANNUALISED
+        for name, target in per_period_target.items()
+    ]
+    lean = tmp_path / "annualised_trials_run.json"
+    lean.write_text(json.dumps(payload), encoding="utf-8")
+
+    trials_path = tmp_path / "annualised_trials.parquet"
+    pd.DataFrame({"date": localised[1:], **trial_returns}).to_parquet(
+        trials_path, index=False
+    )
+
+    out = tmp_path / "units_out"
+    argv = _argv(lean, bars_parquet, out, benchmark=benchmark_parquet)
+    argv += ["--trials-parquet", str(trials_path)]
+    main(argv)
+
+    block = json.loads((out / "evidence.json").read_text())["deflated_sharpe"]
+
+    true_per_period = np.array(
+        [float(np.mean(v) / np.std(v, ddof=1)) for v in trial_returns.values()]
+    )
+    correct_sr0 = expected_max_sharpe(
+        n_trials=3, var_trial_sharpes=float(np.var(true_per_period, ddof=1))
+    )
+    wrong_sr0 = expected_max_sharpe(
+        n_trials=3,
+        var_trial_sharpes=float(
+            np.var([t * ann for t in per_period_target.values()], ddof=1)
+        ),
+    )
+    assert wrong_sr0 > correct_sr0 * 5, "fixture too weak to distinguish the two paths"
+
+    assert block["expected_max_sharpe_perperiod"] == pytest.approx(
+        correct_sr0, rel=0.15
+    ), (
+        f"expected_max_sharpe_perperiod={block['expected_max_sharpe_perperiod']!r} "
+        f"looks like it came from ANNUALISED trial sharpes (predicted ~{wrong_sr0:.4f}) "
+        f"rather than per-period ones (predicted ~{correct_sr0:.4f}) -- build_evidence() "
+        "is feeding TrialRecord.sharpe into deflated_sharpe_ratio unconverted."
+    )
+
+
+def test_the_committed_artifact_compares_observed_against_expected_max_on_the_same_basis() -> None:
+    """docs/findings.md #8. Before the fix, ``expected_max_sharpe_annual`` on the
+    committed artifact was ~6.52 -- 15x ``observed_sharpe_annual`` (~0.42) --
+    because build_evidence() fed already-annualised trial Sharpes into a
+    function that annualises internally. deflated_sharpe still correctly
+    failed the >0.95 gate either way, but the number itself, and the
+    rationale sentence built from it, were wrong by an order of magnitude.
+
+    Corrected, ``expected_max_sharpe_annual`` is on the SAME basis as
+    ``observed_sharpe_annual`` -- comparable magnitudes, a near-miss, which
+    is the actual finding: noise across 108 trials is expected to nearly
+    match what this strategy showed, not dwarf it.
+    """
     committed = REPO / "examples" / "rsi2_nifty" / "audit_out" / "evidence.json"
     block = json.loads(committed.read_text())["deflated_sharpe"]
 
@@ -861,12 +954,18 @@ def test_the_committed_artifact_keeps_the_two_expected_max_figures_far_apart() -
     observed = block["observed_sharpe_annual"]
 
     assert perperiod > 0.0 and annual > 0.0
-    assert annual == pytest.approx(perperiod * np.sqrt(252), rel=1e-9)
-    assert annual > 10.0 * observed, (
-        "the real finding is that noise alone produces an order of magnitude more "
-        "than the candidate showed"
+    assert annual == pytest.approx(perperiod * np.sqrt(252), rel=1e-9), (
+        "the annual field must be the per-period one annualised -- pure "
+        "arithmetic, must hold regardless of what the inputs were"
     )
-    assert perperiod < observed, (
-        "and the per-period figure sits BELOW the observed annual Sharpe, which is "
-        "exactly how confusing the two would flip the page's headline claim"
+    assert annual == pytest.approx(observed, rel=0.15), (
+        f"expected_max_sharpe_annual={annual:.4f} should sit close to "
+        f"observed_sharpe_annual={observed:.4f} (per docs/findings.md #8's "
+        "corrected finding); a figure many multiples of `observed` is the "
+        "double-annualisation bug regressing"
+    )
+    assert perperiod < 0.10 * observed, (
+        "the per-period figure must sit far below observed_sharpe_annual -- "
+        "confusing the two is exactly how the original bug's wrong number "
+        "looked plausible"
     )
