@@ -266,7 +266,15 @@
   var SUBMIT_URL = '/audit/rsi2';
   var jobUrl = function(id){ return '/audit/jobs/' + encodeURIComponent(id); };
   var POLL_INTERVAL_MS = 2500;
-  var POLL_TIMEOUT_MS = 5 * 60 * 1000;
+  // Comfortably past worst-case free-tier runtime: the 108-variant grid is
+  // ~80s on decent hardware but noticeably slower on a shared/throttled
+  // free-tier CPU (observed: several minutes). 10 minutes leaves real
+  // headroom above that rather than just matching it.
+  var POLL_TIMEOUT_MS = 10 * 60 * 1000;
+  // A single 404 might be a transient blip (a redeploy boundary, a proxy
+  // hiccup) rather than the job genuinely being gone -- wait for a few in a
+  // row before giving up, rather than failing on the first one.
+  var CONSECUTIVE_404_LIMIT = 3;
 
   var KNOWN_GATE_ORDER = [
     'leakage_clean', 'beats_benchmark_net', 'deflated_sharpe',
@@ -366,6 +374,7 @@
   var pollDeadline = null;
   var currentJobId = null;
   var markedRunning = false;
+  var consecutive404Count = 0;
 
   function stopTimers(){
     if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
@@ -508,10 +517,15 @@
     }
     fetch(jobUrl(currentJobId)).then(function(res){
       if (res.status === 404){
+        consecutive404Count += 1;
+        if (consecutive404Count < CONSECUTIVE_404_LIMIT){
+          return null; // could be a transient blip -- give it a few more tries
+        }
         stopTimers();
         showError('The job could not be found (it may have expired). Submit again.');
         return null;
       }
+      consecutive404Count = 0;
       if (!res.ok) return null; // transient -- keep polling until the deadline
       return safeJson(res);
     }).then(function(body){
@@ -531,6 +545,7 @@
 
   function startPolling(){
     pollDeadline = Date.now() + POLL_TIMEOUT_MS;
+    consecutive404Count = 0;
     pollTimer = setInterval(pollOnce, POLL_INTERVAL_MS);
     pollOnce();
   }

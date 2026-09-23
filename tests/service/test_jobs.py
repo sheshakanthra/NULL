@@ -134,6 +134,72 @@ def test_submission_past_capacity_raises_job_queue_full_without_creating_a_job()
     assert job is not None and job.result == {"recovered": True}
 
 
+def test_a_job_slower_than_the_ttl_survives_running_and_stays_fetchable_when_polled() -> None:
+    """Production incident: a real audit on Render's free-tier (slow) CPU
+    outlived the in-memory job store and the client got 'job could not be
+    found'. Root cause was NOT a bug in this eviction logic -- a running job
+    (finished_at is None) was never a candidate for eviction even before this
+    test existed (test_only_finished_jobs_are_evicted_by_ttl already proved
+    that). This test pins the exact production shape: a job whose total
+    runtime exceeds the TTL many times over, polled repeatedly during that
+    run exactly like a real client would, on a TTL short enough that any gap
+    in the "never evict while running" guarantee would show up immediately.
+    It must never be evicted while running, and must be fetchable the
+    instant it finishes.
+    """
+    manager = JobManager(max_workers=1, max_queue_size=1, job_ttl_seconds=0.1)
+    started = threading.Event()
+
+    def _slow() -> dict[str, object]:
+        started.set()
+        time.sleep(0.5)  # 5x the TTL -- simulates a slow free-tier CPU
+        return {"ok": True}
+
+    job_id = manager.submit(_slow)
+    assert started.wait(timeout=2), "job never started running"
+
+    # Poll repeatedly during the run, each gap alone longer than the TTL --
+    # exactly the shape of a client polling every few seconds against a job
+    # that takes minutes.
+    for _ in range(3):
+        time.sleep(0.15)
+        job = manager.get(job_id)
+        assert job is not None, (
+            "a running job must never be evicted, no matter how long it runs "
+            "relative to the TTL"
+        )
+        assert job.status == "running"
+
+    _wait_for(lambda: manager.get(job_id).status == "done")  # type: ignore[union-attr]
+
+    # Fetchable immediately on completion -- not a race against the TTL.
+    job = manager.get(job_id)
+    assert job is not None
+    assert job.status == "done"
+    assert job.result == {"ok": True}
+
+
+def test_a_finished_job_stays_alive_while_the_client_keeps_polling_it() -> None:
+    """The grace-window refinement: the TTL clock resets on every successful
+    get(), not just on finishing. A client polling a done job every couple
+    of seconds (as the live page's checkWarmup-adjacent poll loop does) must
+    never have it evicted out from under a poll gap shorter than the TTL,
+    even though the job has been sitting 'done' for far longer than the TTL
+    in total."""
+    manager = JobManager(max_workers=1, max_queue_size=1, job_ttl_seconds=0.1)
+    job_id = manager.submit(lambda: {"ok": True})
+    _wait_for(lambda: manager.get(job_id).status == "done")  # type: ignore[union-attr]
+
+    for _ in range(5):
+        time.sleep(0.06)  # less than the TTL between checks
+        job = manager.get(job_id)
+        assert job is not None, "polling more often than the TTL must keep the job alive"
+
+    # Stop polling -- now it ages out normally.
+    time.sleep(0.2)
+    assert manager.get(job_id) is None
+
+
 def test_only_finished_jobs_are_evicted_by_ttl() -> None:
     manager = JobManager(max_workers=1, max_queue_size=2, job_ttl_seconds=0.05)
     release = threading.Event()

@@ -63,8 +63,12 @@ MAX_CONCURRENT_JOBS = 1
 MAX_QUEUE_SIZE = 2
 
 #: How long a FINISHED (done or error) job's result stays queryable before
-#: it is evicted from memory. Only completed jobs age out this way -- a
-#: queued or running job is never evicted out from under itself.
+#: it is evicted from memory, measured from whichever is later: when it
+#: finished, or when it was last successfully fetched. Only completed jobs
+#: age out this way -- a queued or running job is never evicted out from
+#: under itself, however long it runs relative to this number (a slow
+#: free-tier CPU taking minutes on a grid that's normally seconds does not
+#: shorten this guarantee).
 JOB_TTL_SECONDS = 30 * 60
 
 
@@ -85,6 +89,11 @@ class Job:
     created_at: float = field(default_factory=time.monotonic)
     started_at: float | None = None
     finished_at: float | None = None
+    #: Set by every successful get() that finds this job. Eviction measures
+    #: the TTL from whichever is later, finished_at or this -- so a client
+    #: that keeps polling, however slowly, keeps the job alive; see
+    #: JobManager._evict_expired_locked.
+    last_retrieved_at: float | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
 
@@ -141,18 +150,44 @@ class JobManager:
 
     def get(self, job_id: str) -> Job | None:
         """The job's current state, or ``None`` if it never existed, was
-        rejected at submission, or has aged out of the TTL window."""
+        rejected at submission, or has aged out of the TTL window.
+
+        Marks the job as retrieved *now* -- see ``Job.last_retrieved_at`` --
+        so a client that keeps polling a slow job never loses it purely for
+        having taken longer than ``job_ttl_seconds`` to finish. Done after
+        eviction runs, so a job that just aged out this same call is
+        correctly reported gone rather than resurrected by the fetch that
+        found it missing.
+        """
         with self._lock:
             self._evict_expired_locked()
-            return self._jobs.get(job_id)
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.last_retrieved_at = time.monotonic()
+            return job
 
     def _evict_expired_locked(self) -> None:
-        """Drop completed jobs older than the TTL. Caller holds ``self._lock``."""
-        cutoff = time.monotonic() - self._job_ttl_seconds
+        """Drop completed jobs whose TTL has elapsed. Caller holds ``self._lock``.
+
+        A job is eligible only once it has ``finished_at`` set -- a queued or
+        running job (``finished_at is None``) is never a candidate, no matter
+        how long it has been running or how short the TTL is; this is the
+        one invariant that must hold regardless of how slow the machine
+        running the job is. For an eligible job, the TTL clock resets on
+        every successful ``get()`` (``last_retrieved_at``), so the window
+        that matters is "how long since anyone last checked", not "how long
+        since it finished" -- a client polling every few seconds keeps a
+        finished job alive for as long as it keeps checking, and a job that
+        finishes and is never polled again still gets the full TTL from
+        ``finished_at`` as its grace period.
+        """
+        now = time.monotonic()
         expired = [
             job_id
             for job_id, job in self._jobs.items()
-            if job.finished_at is not None and job.finished_at < cutoff
+            if job.finished_at is not None
+            and (now - max(job.finished_at, job.last_retrieved_at or job.finished_at))
+            >= self._job_ttl_seconds
         ]
         for job_id in expired:
             del self._jobs[job_id]

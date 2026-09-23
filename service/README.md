@@ -195,8 +195,45 @@ idle-sleep -- loses every queued or in-flight job without a trace. Fine for
   single free-tier instance, because the instance refuses to accept more
   work than it owns the capacity to run.
 - Completed (`done`/`error`) jobs are evicted from the job table after
-  `JOB_TTL_SECONDS` (30 minutes) so memory doesn't grow without bound. A
-  queued or running job is never evicted out from under itself.
+  `JOB_TTL_SECONDS` (30 minutes) so memory doesn't grow without bound,
+  measured from whichever is later: when the job finished, or when it was
+  last successfully fetched. A queued or running job is never a candidate
+  for eviction, however long it runs relative to the TTL -- and a client
+  that keeps polling a finished job resets that job's clock on every
+  successful fetch, so it can't age out from under a poll gap shorter than
+  the TTL.
+
+**Incident, Render free-tier production.** A submitted audit ran (gates
+showed RUNNING, elapsed climbing) and then the client got 404 --
+`GET /audit/jobs/{id}` reported the job gone while it was still supposed to
+be running. Root cause was **not** a bug in the eviction logic above: a
+running job's `finished_at` is `None` the entire time it runs, and
+`_evict_expired_locked` only ever considers jobs where that's set --
+already covered by `test_only_finished_jobs_are_evicted_by_ttl`, which
+passed before this incident and still does. The likely actual cause is a
+process restart mid-request: the free tier's ~0.5 CPU running the
+~20-million-iteration pure-Python cost loop
+(`examples/rsi2_nifty/strategy.py`'s `run_variant`, day x symbol x variant,
+GIL-bound, not vectorised) for several minutes instead of the ~80s this
+runs in on more capable hardware, plausibly starving Render's own health
+check or exhausting the instance's memory -- either of which restarts the
+process and wipes the in-memory job table outright, which is the
+already-documented in-memory tradeoff above, just triggered by resource
+pressure rather than a deploy. Not confirmed against Render's own logs
+(not accessible from here); stated with that caveat rather than as fact.
+
+What actually changed in response: the client poll ceiling went from 5 to
+10 minutes (comfortable headroom above observed free-tier runtimes, not
+just matching them), a single 404 no longer ends the poll loop immediately
+(`CONSECUTIVE_404_LIMIT` in `service/static/index.html` -- tolerates a
+transient blip, e.g. a redeploy boundary, without waiting the full ceiling
+on a job that's genuinely gone), and the grace-window refinement above
+(`last_retrieved_at`) makes a polled-but-finished job's TTL reset on every
+fetch rather than being a fixed window from `finished_at` alone. None of
+these can un-lose a job whose process actually restarted -- that data loss
+is real and is the accepted tradeoff stated at the top of this section --
+they narrow the gap between "genuinely gone" and "still running, just
+slower than expected."
 
 ## Tests
 
