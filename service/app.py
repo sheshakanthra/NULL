@@ -1,10 +1,18 @@
 """NULL audit service. BUILD.md's live-audit phase.
 
 W0 proved the wire: a web request can run the *real* ``null audit`` engine and
-get back the *real* committed answer (``POST /audit/demo``). W1 adds real
-input for one preset -- RSI(2) -- without touching that guarantee. Nothing
-here reimplements audit logic: every call below is the same code path
-``null/cli.py`` uses on the command line (``build_parser`` /
+get back the *real* committed answer (``POST /audit/demo``). W1 added real
+input for one preset -- RSI(2). W2 makes that input asynchronous: Render's
+free tier times out a request at ~30s, and the real 108-variant grid audit
+takes ~80s end to end, so ``POST /audit/rsi2`` no longer blocks -- it
+validates, enqueues, and returns a job_id immediately, and
+``GET /audit/jobs/{job_id}`` polls for the result. The job layer itself
+(``service/jobs.py``) is a small, bounded, in-process queue -- see that
+module's docstring for why not Celery/Redis, and for the concurrency-cap
+tradeoff.
+
+Nothing here reimplements audit logic: every call below is the same code
+path ``null/cli.py`` uses on the command line (``build_parser`` /
 ``run_audit_command``), imported from ``null`` directly. The RSI(2)
 backtester that turns a caller's grid into a ``run.json`` lives in
 ``service/backtest/rsi2.py`` and is equally strict about not feeding the
@@ -30,10 +38,12 @@ from service.backtest.rsi2 import (
     MIN_HOLDING_CAP,
     MIN_PERIOD,
     MIN_THRESHOLD,
+    GridSpec,
     GridSpecError,
     build_grid_spec,
     run_backtest,
 )
+from service.jobs import JobManager, JobQueueFullError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_DIR = REPO_ROOT / "examples" / "rsi2_nifty"
@@ -54,6 +64,10 @@ DEMO_ARGV = [
 ]
 
 app = FastAPI(title="NULL audit service")
+
+#: One process-wide job manager. See service/jobs.py's docstring for the
+#: in-memory-only, single-instance tradeoff this implies.
+job_manager = JobManager()
 
 
 def _committed_evidence_hash() -> str:
@@ -137,10 +151,13 @@ class Rsi2GridRequest(BaseModel):
     holding_caps: list[int] = Field(min_length=1)
 
 
-@app.post("/audit/rsi2")
-def audit_rsi2(request: Rsi2GridRequest) -> dict[str, Any]:
-    """Backtest a caller-chosen RSI(2) grid against the committed NIFTY 50
-    cache and audit the result with the real engine.
+def _run_rsi2_audit(spec: GridSpec) -> dict[str, Any]:
+    """The actual backtest-then-audit work for one RSI(2) grid, run on a
+    worker thread by :data:`job_manager`. Raises plain exceptions on
+    failure -- never ``HTTPException``, which is a request-layer concept
+    with no meaning on a background thread -- and ``JobManager`` turns
+    whatever's raised into ``str(exc)`` on the job's ``error`` field: a
+    clean message, never a stack trace, to whoever polls for the result.
 
     Two temp directories, not one: the backtester's own output (``run.json``
     and its siblings) is itself untrusted until the audit has run on it, so
@@ -152,25 +169,12 @@ def audit_rsi2(request: Rsi2GridRequest) -> dict[str, Any]:
     returning -- it must never be hardcoded, inferred, or allowed to drift
     from what was actually backtested (CLAUDE.md invariant 7).
     """
-    try:
-        spec = build_grid_spec(
-            periods=tuple(request.periods),
-            entries=tuple(request.entries),
-            exits=tuple(request.exits),
-            holding_caps=tuple(request.holding_caps),
-        )
-    except GridSpecError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
     with tempfile.TemporaryDirectory(prefix="null-rsi2-") as tmp:
         base = Path(tmp)
         backtest_dir = base / "backtest"
         audit_dir = base / "audit"
 
-        try:
-            artifacts = run_backtest(spec, backtest_dir)
-        except (FileNotFoundError, ValueError) as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        artifacts = run_backtest(spec, backtest_dir)
 
         argv = [
             "audit",
@@ -183,24 +187,18 @@ def audit_rsi2(request: Rsi2GridRequest) -> dict[str, Any]:
             str(audit_dir),
         ]
         args = build_parser().parse_args(argv)
-        try:
-            run_audit_command(args)
-        except InputError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        run_audit_command(args)
 
         verdict = json.loads((audit_dir / "verdict.json").read_text(encoding="utf-8"))
         evidence = json.loads((audit_dir / "evidence.json").read_text(encoding="utf-8"))
 
     observed_n_trials = verdict.get("generated_from", {}).get("n_trials")
     if observed_n_trials != spec.n_variants:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"audited n_trials {observed_n_trials!r} does not match the "
-                f"requested grid size {spec.n_variants}. Refusing to return a "
-                "verdict whose declared trial count disagrees with the grid "
-                "that was actually run."
-            ),
+        raise RuntimeError(
+            f"audited n_trials {observed_n_trials!r} does not match the "
+            f"requested grid size {spec.n_variants}. Refusing to return a "
+            "verdict whose declared trial count disagrees with the grid "
+            "that was actually run."
         )
 
     return {
@@ -214,6 +212,62 @@ def audit_rsi2(request: Rsi2GridRequest) -> dict[str, Any]:
         "verdict": verdict,
         "evidence": evidence,
     }
+
+
+@app.post("/audit/rsi2", status_code=202)
+def audit_rsi2(request: Rsi2GridRequest) -> dict[str, Any]:
+    """Validate a caller-chosen RSI(2) grid and enqueue it for backtest +
+    audit against the committed NIFTY 50 cache. Returns immediately --
+    poll ``GET /audit/jobs/{job_id}`` for the result.
+
+    Validation (``build_grid_spec``, InputError-shaped errors -> 422) always
+    runs before enqueueing, exactly as it did when this endpoint was
+    synchronous: a bad grid is rejected on the spot, never queued to fail
+    later on a worker thread. A full job queue (``JobQueueFullError`` -> 429)
+    is the only other way this call can fail -- everything past that point
+    happens on a background thread and is reported through the job, not this
+    response.
+    """
+    try:
+        spec = build_grid_spec(
+            periods=tuple(request.periods),
+            entries=tuple(request.entries),
+            exits=tuple(request.exits),
+            holding_caps=tuple(request.holding_caps),
+        )
+    except GridSpecError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        job_id = job_manager.submit(lambda: _run_rsi2_audit(spec))
+    except JobQueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/audit/jobs/{job_id}")
+def get_job(job_id: str) -> dict[str, Any]:
+    """Poll a job's status. ``done`` includes ``n_trials``/``grid``/
+    ``verdict``/``evidence``; ``error`` includes a clean message, never a
+    stack trace (see :func:`_run_rsi2_audit`). A 404 covers both "never
+    existed" and "existed but its TTL expired" -- indistinguishable from the
+    caller's side, and neither is this endpoint's problem to explain further.
+    """
+    job = job_manager.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no job {job_id!r}: unknown, or its result has expired.",
+        )
+
+    payload: dict[str, Any] = {"job_id": job.job_id, "status": job.status}
+    if job.status == "done":
+        assert job.result is not None
+        payload.update(job.result)
+    elif job.status == "error":
+        payload["error"] = job.error
+    return payload
 
 
 @app.get("/audit/rsi2/limits")
