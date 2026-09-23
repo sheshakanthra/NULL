@@ -1,7 +1,23 @@
-# The repo itself, installed as a package -- service/app.py does `import null`
-# directly and must never reimplement audit logic. Editable: this directory
-# runs from a checkout, not a wheel build step.
--e ..
+# The repo itself is NOT installed from this file. It used to be, via
+# `-e ..` here -- a relative editable path written INSIDE a requirements
+# file. That broke on Render: the build failed with "file:///opt/render/
+# project ... does not appear to be a Python project", because pip's
+# resolution of a relative `-e` path declared inside a -r file is exactly
+# the kind of thing that behaves differently across pip versions and build
+# contexts, and it silently resolved to the wrong directory in Render's
+# build environment even though the identical command worked locally.
+#
+# Fixed by not doing that anywhere, in any environment: the repo root is
+# now always installed with an explicit `-e .`, run with the working
+# directory SET to the repo root, as its own pip argument rather than a
+# path buried inside this file. See render.yaml's buildCommand and this
+# package's README ("Run locally") for the one command both use:
+#
+#   pip install -e . -r service/requirements.txt
+#
+# `.` is unambiguous regardless of how any given pip version resolves
+# relative paths written inside a requirements file -- there is nothing
+# left to resolve differently.
 
 fastapi>=0.115
 uvicorn[standard]>=0.30

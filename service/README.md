@@ -19,23 +19,29 @@ From the repo root:
 python -m venv .venv
 .venv\Scripts\activate          # Windows
 # source .venv/bin/activate     # macOS/Linux
-pip install -r service/requirements.txt
+pip install -e . -r service/requirements.txt
 uvicorn service.app:app --reload --app-dir .
 ```
 
-`--app-dir .` (repo root) matters: `service/app.py` locates the committed
-example via a path relative to its own file, and the `-e ..` install in
-`requirements.txt` assumes it's run from `service/` (so run the `pip install`
-from the repo root as shown, where `service/requirements.txt`'s `..` resolves
-to the repo root itself).
+Both commands assume the repo root as the working directory. `-e .`
+installs this repo itself as a package (`service/app.py` does `import null`
+directly); it's a separate, explicit pip argument rather than a path written
+inside `service/requirements.txt`, because that used to be `-e ..` inside
+the file and it broke the Render build -- see `service/requirements.txt`'s
+own comment and the Deploy section below for the full story. `--app-dir .`
+matters separately: `service/app.py` locates the committed example via a
+path relative to its own file, and the plain `uvicorn` console script
+(unlike `python -m uvicorn`) doesn't put the current directory on
+`sys.path` by default.
 
 ## Deploy (Render) -- W4
 
 `render.yaml` at the repo root is a Render Blueprint: one free-tier web
-service, `pip install -r service/requirements.txt` as the build command,
-`uvicorn service.app:app --host 0.0.0.0 --port $PORT --app-dir .` as the
-start (Render assigns `$PORT`; the service must bind it, not a hardcoded
-port), `/health` as the health-check path.
+service, `pip install -e . -r service/requirements.txt` as the build
+command (same command as local dev, above -- both need the repo root
+installed the same explicit way), `uvicorn service.app:app --host 0.0.0.0
+--port $PORT --app-dir .` as the start (Render assigns `$PORT`; the service
+must bind it, not a hardcoded port), `/health` as the health-check path.
 
 **This step needs a Render account and cannot be done from inside this
 repo or by an agent working in it** -- connecting a GitHub repo to Render is

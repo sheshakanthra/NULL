@@ -2,12 +2,22 @@
 # live-audit-service phase, W4.
 #
 # One service, free tier: this repo installed as a package (service/app.py
-# imports null/ directly -- see service/requirements.txt) plus fastapi/
-# uvicorn, serving service/app.py's FastAPI app. No database, no persistent
-# disk: job state lives in service/jobs.py's in-process JobManager only, by
-# design (see that module's docstring) -- a free-tier instance restart loses
+# imports null/ directly) plus fastapi/uvicorn (service/requirements.txt),
+# serving service/app.py's FastAPI app. No database, no persistent disk: job
+# state lives in service/jobs.py's in-process JobManager only, by design
+# (see that module's docstring) -- a free-tier instance restart loses
 # in-flight jobs, which is an accepted tradeoff for a demo service, not an
 # oversight here.
+#
+# buildCommand installs the repo root package with an explicit `-e .`
+# rather than a relative `-e ..` written inside service/requirements.txt --
+# that was the original approach and it broke the Render build ("does not
+# appear to be a Python project", resolving to the wrong directory in
+# Render's build context even though the identical file worked locally). A
+# bare `-e .`, run with Render's buildCommand working directory at the repo
+# root (Render's default when no `rootDir` is set, which is the case here),
+# has nothing left to resolve ambiguously. See service/requirements.txt's
+# own comment for the full story.
 #
 # Deploy: connect this repo in the Render dashboard via
 # "New +" -> "Blueprint", pointing at this file. Render provisions the
@@ -25,7 +35,7 @@ services:
     plan: free
     branch: main
     region: oregon
-    buildCommand: pip install -r service/requirements.txt
+    buildCommand: pip install -e . -r service/requirements.txt
     startCommand: uvicorn service.app:app --host 0.0.0.0 --port $PORT --app-dir .
     healthCheckPath: /health
     envVars:
