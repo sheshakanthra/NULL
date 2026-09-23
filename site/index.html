@@ -29,7 +29,7 @@
      NULL terminal showcase — final
      All figures below are transcribed once from the committed
      audit_out/evidence.json + verdict.json (evidence_hash
-     3f40aa2e…). Regenerate by hand only if that verdict changes.
+     baff7b68…). Regenerate by hand only if that verdict changes.
      Every number carries a data-src comment to its key.
      ───────────────────────────────────────────────────────────── */
   :root{
@@ -181,14 +181,14 @@
     <span class="tk">RSI(2)·NIFTY50 <b class="up">GROSS SR 0.95</b></span>
     <span class="tk">NET CAGR <b class="dn">3.16%</b></span>
     <span class="tk">vs BENCH <b>13.25%</b></span>
-    <span class="tk">DEFLATED SR <b class="dn">~0</b></span>
+    <span class="tk">DEFLATED SR <b class="dn">0.52</b></span>
     <span class="tk">RC p <b class="dn">0.977</b></span>
     <span class="tk">VERDICT <b class="dn">REJECT</b></span>
     <span class="tk">TRIALS <b>108</b></span>
     <span class="tk">RSI(2)·NIFTY50 <b class="up">GROSS SR 0.95</b></span>
     <span class="tk">NET CAGR <b class="dn">3.16%</b></span>
     <span class="tk">vs BENCH <b>13.25%</b></span>
-    <span class="tk">DEFLATED SR <b class="dn">~0</b></span>
+    <span class="tk">DEFLATED SR <b class="dn">0.52</b></span>
     <span class="tk">RC p <b class="dn">0.977</b></span>
     <span class="tk">VERDICT <b class="dn">REJECT</b></span>
     <span class="tk">TRIALS <b>108</b></span>
@@ -248,7 +248,7 @@
         <!-- states + observed strings from verdict.json gates[] -->
         <div class="gate" data-verd="pass" data-obs="0 fatal flags"><span class="ic">·</span><span class="name">leakage_clean</span><span class="obs"></span><span class="verd">QUEUED</span></div>
         <div class="gate" data-verd="fail" data-obs="α t 1.58 < 2.0 · net 3.16% vs 13.25%"><span class="ic">·</span><span class="name">beats_benchmark_net</span><span class="obs"></span><span class="verd">QUEUED</span></div>
-        <div class="gate" data-verd="fail" data-obs="≈0 < 0.95"><span class="ic">·</span><span class="name">deflated_sharpe</span><span class="obs"></span><span class="verd">QUEUED</span></div>
+        <div class="gate" data-verd="fail" data-obs="0.52 < 0.95"><span class="ic">·</span><span class="name">deflated_sharpe</span><span class="obs"></span><span class="verd">QUEUED</span></div>
         <div class="gate" data-verd="fail" data-obs="p 0.977 > 0.05"><span class="ic">·</span><span class="name">reality_check</span><span class="obs"></span><span class="verd">QUEUED</span></div>
         <div class="gate" data-verd="pass" data-obs="4 of 5 folds"><span class="ic">·</span><span class="name">walkforward_consistency</span><span class="obs"></span><span class="verd">QUEUED</span></div>
         <div class="gate" data-verd="pass" data-obs="77% of peak > 60%"><span class="ic">·</span><span class="name">sensitivity_plateau</span><span class="obs"></span><span class="verd">QUEUED</span></div>
@@ -267,12 +267,14 @@
     <div class="sentence">
       <!-- data-src: deflated_sharpe.expected_max_sharpe_annual vs observed_sharpe_annual -->
       With <b>108 trials</b> over 3,700 sessions, noise alone is expected to produce a
-      maximum Sharpe of <b>6.5</b>. The strategy showed <b>0.42</b>.
-      <span class="hl">The search cannot tell this edge from luck — because there is no edge.</span>
+      maximum Sharpe of <b>0.41</b>. The strategy showed <b>0.42</b>.
+      <span class="hl">It sits exactly where luck would put it — the search cannot tell
+      this edge from noise, because there is none to tell.</span>
     </div>
-    <p class="body dim">That single line is the product. Once you account for how many
-       variants were tried, and for the returns' skew (−3.1) and heavy tails, the deflated
-       Sharpe rounds to zero. A number near 1.0 became a number near nothing.</p>
+    <p class="body dim">That near-tie is the product. The deflated Sharpe — 0.52, a coin
+       flip — is the probability the true edge clears zero once you account for the 108
+       variants tried and the returns' skew and fat tails. A number that looked like 0.95
+       is, honestly measured, indistinguishable from chance.</p>
   </section>
 
   <section class="reveal">
@@ -311,7 +313,7 @@
       Four gates fail (benchmark, deflated Sharpe, reality check, capacity); three pass.
       Cost rates from the published charge list, not reconciled to a live contract note;
       survivorship and sub-25% corporate actions disclosed in the full report.<br>
-      <span class="hash">generated from verdict &amp; evidence · hash 3f40aa2efda9a4773c7239b5a84b1a0ba75b73b9146dbeba856dd46f018bc4b2</span><br><br>
+      <span class="hash">generated from verdict &amp; evidence · hash baff7b685ddcace89b71c6fb3d93182c992c8362b0c4d28889896bead3e498a9</span><br><br>
       <a href="https://github.com/sheshakanthra/NULL">github.com/sheshakanthra/NULL</a>
     </div>
   </section>
