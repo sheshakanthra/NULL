@@ -6,8 +6,10 @@ A FastAPI wrapper around the real `null audit` engine. `service/` imports
 input for one preset -- RSI(2) (`POST /audit/rsi2`) -- via the bounded
 backtester in `service/backtest/rsi2.py`. W2 made that endpoint
 asynchronous: submit -> poll -> result, run by the small in-process job
-queue in `service/jobs.py`. Presets only; free-form strategy description is
-a later phase.
+queue in `service/jobs.py`. W3 adds a live frontend for it --
+`service/static/index.html`, served at `GET /app` -- reusing the showcase's
+terminal visual language against a separate page that runs real audits.
+Presets only; free-form strategy description is a later phase.
 
 ## Run locally
 
@@ -27,9 +29,48 @@ example via a path relative to its own file, and the `-e ..` install in
 from the repo root as shown, where `service/requirements.txt`'s `..` resolves
 to the repo root itself).
 
+## The live page
+
+`http://127.0.0.1:8000/app` -- a strategy picker (RSI(2), the four grid
+axes, pre-filled with the committed grid), submits to `POST /audit/rsi2`,
+polls `GET /audit/jobs/{job_id}` every 2.5s (5-minute ceiling), and renders
+the real result: queued/running state with an elapsed timer and all seven
+gate names shown (no fake per-gate progress -- the backend only reports
+overall job status, so the page doesn't pretend otherwise), then on done the
+real gates (name, PASS/FAIL/NOT_COMPUTABLE, and the actual
+`GateResult.rationale` sentence -- not a hand-tuned summary, since the grid
+here isn't fixed), the REJECT/PASS stamp, the `deflated_sharpe` rationale in
+the showcase's paper-coloured sentence box, and the full `evidence_hash`. A
+429 (capacity) or a job `error` renders its own clean state, never a stack
+trace. No framework -- vanilla JS, `fetch` + `setInterval`, same as
+`site/index.html`.
+
+It is a **separate page** from the fixed showcase (`site/index.html`) --
+that one is a portfolio piece, its numbers locked to the committed artifact,
+and this route never touches it. A nav link points from the live page back
+to the showcase; the reverse link, and the live page's own href (currently a
+placeholder, `#`, with an explanatory title tooltip), wait on W4 picking
+real hosting for both, since they'll very likely be on different domains
+(Render vs. Vercel) and the URL isn't known yet.
+
+Verified with a real browser (Playwright, headless Chromium) against the
+local backend: submitted the default (committed) grid, watched it through
+queued -> running (elapsed timer, all seven gates shown RUNNING) -> done,
+and confirmed the rendered verdict -- REJECT, the same four failing gates,
+the real `deflated_sharpe` rationale, and the full `baff7b68...` hash --
+byte-for-byte matches the committed artifact. Separately filled the
+service's real capacity (three live submissions) and confirmed the page
+renders the 429 "AT CAPACITY" state correctly against a genuinely busy
+instance. No uncaught JS exceptions in either run (Chromium's console does
+log a "Failed to load resource: 429" line for the capacity case -- that's
+the browser's own network-panel logging of any non-2xx `fetch` response, not
+an application error; the page's own error handling ran and rendered
+correctly).
+
 ## Endpoints
 
 - `GET /health` -- `{"status": "ok"}`
+- `GET /app` -- the live audit page described above.
 - `POST /audit/demo` -- runs `examples/rsi2_nifty/run.json` (plus its
   trials-parquet, cost-robustness sweep, and sensitivity surface) through the
   real `null audit` engine and returns `{"evidence_hash", "verdict",

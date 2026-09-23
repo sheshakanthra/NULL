@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from null.cli import InputError, build_parser, run_audit_command
@@ -48,6 +49,7 @@ from service.jobs import JobManager, JobQueueFullError
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_DIR = REPO_ROOT / "examples" / "rsi2_nifty"
 COMMITTED_VERDICT = EXAMPLE_DIR / "audit_out" / "verdict.json"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 # The exact invocation that reproduces the committed artifact -- see
 # examples/rsi2_nifty/README.md. No --benchmark: it defaults to the committed
@@ -91,6 +93,19 @@ def _committed_evidence_hash() -> str:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/app", response_class=HTMLResponse)
+def live_app() -> str:
+    """The live audit tool -- W3. A separate page from the fixed showcase
+    (``site/index.html``, portfolio piece, committed-artifact-locked,
+    untouched by this route): this one calls ``POST /audit/rsi2`` and
+    ``GET /audit/jobs/{job_id}`` for real, on whatever grid the visitor
+    submits. Read from disk on every request rather than cached in memory --
+    consistent with how ``_committed_evidence_hash`` above handles the same
+    tradeoff, and cheap enough for a single small HTML file.
+    """
+    return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
 
 @app.post("/audit/demo")

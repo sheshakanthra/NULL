@@ -43,6 +43,24 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_live_app_page_serves_and_wires_the_real_endpoints() -> None:
+    """W3: service/static/index.html is served at /app. Not a render test
+    (that needs a browser -- see the session's Playwright verification) --
+    just that the file exists, is served as HTML, and the markup a human
+    would need to actually drive it (the four grid inputs, the audit button,
+    and the real endpoint paths this page's JS calls) is present."""
+    response = client.get("/app")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+
+    body = response.text
+    for field_id in ("f-periods", "f-entries", "f-exits", "f-caps", "btn-audit"):
+        assert f'id="{field_id}"' in body
+    assert "/audit/rsi2" in body
+    assert "/audit/jobs/" in body
+    assert "/audit/rsi2/limits" in body
+
+
 def test_audit_demo_reproduces_the_committed_verdict() -> None:
     committed = json.loads(COMMITTED_VERDICT.read_text(encoding="utf-8"))
     expected_hash = committed["evidence_hash"]
