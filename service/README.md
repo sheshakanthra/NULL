@@ -29,6 +29,63 @@ example via a path relative to its own file, and the `-e ..` install in
 from the repo root as shown, where `service/requirements.txt`'s `..` resolves
 to the repo root itself).
 
+## Deploy (Render) -- W4
+
+`render.yaml` at the repo root is a Render Blueprint: one free-tier web
+service, `pip install -r service/requirements.txt` as the build command,
+`uvicorn service.app:app --host 0.0.0.0 --port $PORT --app-dir .` as the
+start (Render assigns `$PORT`; the service must bind it, not a hardcoded
+port), `/health` as the health-check path.
+
+**This step needs a Render account and cannot be done from inside this
+repo or by an agent working in it** -- connecting a GitHub repo to Render is
+an account-level action taken in Render's own dashboard:
+
+1. In the Render dashboard: **New +** -> **Blueprint**, pick this repo
+   (`sheshakanthra/NULL`) and branch (`main`). Render reads `render.yaml`
+   and provisions the `null-audit-service` web service from it.
+2. Once deployed, note the service's URL (`https://<name>.onrender.com` --
+   the exact name depends on availability at creation time).
+3. In the service's **Environment** tab, set `SHOWCASE_ORIGIN` to the
+   showcase's real production origin (e.g. `https://<something>.vercel.app`,
+   no trailing slash) -- `render.yaml` marks it `sync: false` deliberately,
+   so it's set once in the dashboard rather than committed as a guess. Unset,
+   the service still runs fine; only cross-origin `fetch` calls *from* the
+   showcase would need it (see the CORS note below -- nothing calls it that
+   way today).
+4. Every push to `main` redeploys automatically, same as the showcase's
+   Vercel project already does for `site/`.
+
+**Free-tier reality, stated plainly because it will be the first thing a
+visitor notices:** Render's free web services spin down after a period of
+inactivity and cold-start on the next request, which can take 30-60s on top
+of however long the request itself takes. A first-hit `/audit/rsi2` can
+therefore take cold-start-plus-~80s before its job even starts running. The
+live page's `checkWarmup()` (fires on load, pings `/health`) shows an amber
+hint -- *"This is a free-tier instance -- it looks like it was asleep..."* --
+when the health check itself is slow, so the wait reads as an explained cold
+start rather than a broken page. This is an accepted tradeoff for a free
+demo service, not something W5+ needs to fix.
+
+**CORS.** `service/app.py` adds `CORSMiddleware` allow-listing exactly
+`SHOWCASE_ORIGIN` (never `"*"` -- a wildcard would let any page on the
+internet drive audits from a visitor's browser using this instance's
+capacity) when that env var is set, and adds no CORS headers at all when
+it's unset. Nothing in the current design actually needs this: the showcase
+only links to `/app` (a plain `<a href>`, a full-page navigation, not a
+`fetch`), and `/app` calls its own same-origin API. It's wired up per the
+deploy brief so it's correct the moment anything cross-origin is added.
+
+**Unlisted, not access-controlled.** The live tool (`/app` and everything
+under it) is reachable by anyone with the direct URL but is not meant to be
+found by search: `GET /robots.txt` disallows the whole origin, and `/app`
+itself carries `<meta name="robots" content="noindex,nofollow">`. This is
+discoverability, not authentication -- there is no login, and none is
+planned for a free-tier demo. The showcase links to it, but only from its
+footer, deliberately not from hero-level visible content -- the showcase is
+the public portfolio piece; the live tool is the by-invitation demo behind
+it.
+
 ## The live page
 
 `http://127.0.0.1:8000/app` -- a strategy picker (RSI(2), the four grid
@@ -48,10 +105,10 @@ trace. No framework -- vanilla JS, `fetch` + `setInterval`, same as
 It is a **separate page** from the fixed showcase (`site/index.html`) --
 that one is a portfolio piece, its numbers locked to the committed artifact,
 and this route never touches it. A nav link points from the live page back
-to the showcase; the reverse link, and the live page's own href (currently a
-placeholder, `#`, with an explanatory title tooltip), wait on W4 picking
-real hosting for both, since they'll very likely be on different domains
-(Render vs. Vercel) and the URL isn't known yet.
+to the showcase, visibly (that direction is safe); the showcase links back
+only from its footer (see "Unlisted, not access-controlled" above). Both
+links need the real production URLs, wired once this service is deployed
+and the showcase's Vercel URL is known -- see the Deploy section above.
 
 Verified with a real browser (Playwright, headless Chromium) against the
 local backend: submitted the default (committed) grid, watched it through

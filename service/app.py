@@ -2,14 +2,17 @@
 
 W0 proved the wire: a web request can run the *real* ``null audit`` engine and
 get back the *real* committed answer (``POST /audit/demo``). W1 added real
-input for one preset -- RSI(2). W2 makes that input asynchronous: Render's
+input for one preset -- RSI(2). W2 made that input asynchronous: Render's
 free tier times out a request at ~30s, and the real 108-variant grid audit
 takes ~80s end to end, so ``POST /audit/rsi2`` no longer blocks -- it
 validates, enqueues, and returns a job_id immediately, and
 ``GET /audit/jobs/{job_id}`` polls for the result. The job layer itself
 (``service/jobs.py``) is a small, bounded, in-process queue -- see that
 module's docstring for why not Celery/Redis, and for the concurrency-cap
-tradeoff.
+tradeoff. W3 added the live frontend (``service/static/index.html``, served
+at ``/app``). W4 deploys this to Render (``render.yaml`` at the repo root) --
+see that file and ``service/README.md`` for the free-tier cold-start
+reality, and this module's CORS setup below.
 
 Nothing here reimplements audit logic: every call below is the same code
 path ``null/cli.py`` uses on the command line (``build_parser`` /
@@ -22,12 +25,14 @@ auditor garbage -- see that module's docstring.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from null.cli import InputError, build_parser, run_audit_command
@@ -71,6 +76,33 @@ app = FastAPI(title="NULL audit service")
 #: in-memory-only, single-instance tradeoff this implies.
 job_manager = JobManager()
 
+def _normalize_origin(value: str) -> str:
+    """Strip surrounding whitespace and a trailing slash from a configured
+    origin. A trailing slash is the easy way to configure this wrong in
+    Render's dashboard -- ``Access-Control-Allow-Origin`` must match the
+    browser's ``Origin`` header exactly, and browsers never send one with a
+    trailing slash, so a mismatched allow-list value would silently reject
+    every real request rather than erroring loudly."""
+    return value.strip().rstrip("/")
+
+
+# CORS: the showcase (a separate Vercel origin, per render.yaml's comment)
+# only links to this service today -- a plain <a href>, which needs no CORS
+# at all -- but the deploy brief asks for this set up correctly in case that
+# ever becomes a cross-origin fetch. Allow-listed by exact origin, never "*":
+# a wildcard would let any page on the internet drive audits from a
+# visitor's browser using this service's capacity. SHOWCASE_ORIGIN unset
+# (local dev, or before it's configured in Render's dashboard) means no CORS
+# middleware at all -- same-origin use of /app is unaffected either way.
+SHOWCASE_ORIGIN = _normalize_origin(os.environ.get("SHOWCASE_ORIGIN", ""))
+if SHOWCASE_ORIGIN:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[SHOWCASE_ORIGIN],
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+    )
+
 
 def _committed_evidence_hash() -> str:
     """The evidence_hash the demo audit must reproduce.
@@ -93,6 +125,18 @@ def _committed_evidence_hash() -> str:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+def robots() -> str:
+    """The live tool is unlisted, not access-controlled: reachable by anyone
+    with the URL, but not meant to be crawled, indexed, or discovered by
+    search. This disallows the whole origin -- /health and /audit/* are JSON
+    endpoints, not pages, so there's nothing on this service worth a partial
+    allow-list. See also the <meta name="robots"> tag on /app itself; the two
+    are redundant on purpose (a crawler that ignores one may still respect
+    the other)."""
+    return "User-agent: *\nDisallow: /\n"
 
 
 @app.get("/app", response_class=HTMLResponse)

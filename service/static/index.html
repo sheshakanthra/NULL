@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NULL — live audit</title>
 <meta name="description" content="Submit an RSI(2) parameter grid and watch NULL audit it for real, against the committed NIFTY 50 cache.">
+<meta name="robots" content="noindex,nofollow">
 <style>
   /* ─────────────────────────────────────────────────────────────
      Fonts inlined, byte-identical to site/index.html's own blocks --
@@ -109,6 +110,7 @@
   .btn.retry:hover:not(:disabled){box-shadow:0 0 30px -12px var(--loss-glow);color:#ff9498}
 
   .form-error{font-size:12.5px;color:var(--loss);max-width:52ch;line-height:1.5}
+  .warmup-hint{margin-top:16px;font-size:12px;color:var(--amber);opacity:0.85;max-width:52ch;line-height:1.5}
 
   .running-line{padding:18px 16px;font-size:13px;color:var(--dim);border-bottom:1px solid var(--grid);
     line-height:1.6}
@@ -198,6 +200,7 @@
       <button class="btn" id="btn-audit">AUDIT ▸</button>
       <div class="form-error" id="form-error" hidden></div>
     </div>
+    <div class="warmup-hint" id="warmup-hint" hidden></div>
   </section>
 
   <section id="panel-running" hidden>
@@ -258,6 +261,7 @@
 (function(){
   "use strict";
 
+  var HEALTH_URL = '/health';
   var LIMITS_URL = '/audit/rsi2/limits';
   var SUBMIT_URL = '/audit/rsi2';
   var jobUrl = function(id){ return '/audit/jobs/' + encodeURIComponent(id); };
@@ -325,6 +329,35 @@
 
   function safeJson(res){
     return res.json().catch(function(){ return null; });
+  }
+
+  var WARMUP_THRESHOLD_MS = 2500;
+
+  function checkWarmup(){
+    var hint = $('warmup-hint');
+    var start = Date.now();
+    var wasSlow = false;
+    var warnTimer = setTimeout(function(){
+      wasSlow = true;
+      hint.hidden = false;
+      hint.textContent = 'This is a free-tier instance -- it looks like it was asleep and ' +
+        'is waking up. The first Audit click can take 30-60s longer than usual on top of ' +
+        'the normal run time. Thanks for waiting.';
+    }, WARMUP_THRESHOLD_MS);
+
+    fetch(HEALTH_URL).then(function(res){
+      clearTimeout(warnTimer);
+      if (!wasSlow) return; // fast and warm -- nothing worth telling anyone
+      if (res.ok){
+        hint.textContent = 'Service is awake now -- Audit will run at normal speed.';
+        setTimeout(function(){ hint.hidden = true; }, 6000);
+      }
+    }).catch(function(){
+      clearTimeout(warnTimer);
+      hint.hidden = false;
+      hint.textContent = 'Could not reach the service yet -- it may still be starting up ' +
+        '(free-tier cold start). Try Audit in a moment.';
+    });
   }
 
   var pollTimer = null;
@@ -560,6 +593,7 @@
 
   loadLimits();
   updateGridHint();
+  checkWarmup();
   show('panel-form');
 })();
 </script>

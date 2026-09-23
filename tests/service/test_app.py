@@ -60,6 +60,34 @@ def test_live_app_page_serves_and_wires_the_real_endpoints() -> None:
     assert "/audit/jobs/" in body
     assert "/audit/rsi2/limits" in body
 
+    # W4: unlisted, not access-controlled -- discoverable only by direct URL.
+    assert '<meta name="robots" content="noindex,nofollow">' in body
+
+
+def test_normalize_origin_strips_whitespace_and_trailing_slash() -> None:
+    """W4: a trailing slash on SHOWCASE_ORIGIN would make CORS silently
+    reject every real request (browsers never send an Origin header with a
+    trailing slash) -- this is the one bit of the CORS wiring worth pinning
+    directly, since the full middleware is only exercised by an env var set
+    before service.app is imported (verified live once deployed instead)."""
+    from service.app import _normalize_origin
+
+    assert _normalize_origin("https://example.vercel.app") == "https://example.vercel.app"
+    assert _normalize_origin("https://example.vercel.app/") == "https://example.vercel.app"
+    assert _normalize_origin("  https://example.vercel.app  ") == "https://example.vercel.app"
+    assert _normalize_origin("") == ""
+
+
+def test_robots_txt_disallows_everything() -> None:
+    """W4: the live tool is unlisted. robots.txt backs up /app's own
+    <meta name="robots"> tag -- a crawler that ignores one may respect the
+    other. Disallows the whole origin: /health and /audit/* are JSON
+    endpoints, nothing here is worth a partial allow-list."""
+    response = client.get("/robots.txt")
+    assert response.status_code == 200
+    assert "text/plain" in response.headers["content-type"]
+    assert response.text == "User-agent: *\nDisallow: /\n"
+
 
 def test_audit_demo_reproduces_the_committed_verdict() -> None:
     committed = json.loads(COMMITTED_VERDICT.read_text(encoding="utf-8"))

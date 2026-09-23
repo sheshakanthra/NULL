@@ -1,0 +1,42 @@
+# Render Blueprint for the NULL live audit service (service/). BUILD.md's
+# live-audit-service phase, W4.
+#
+# One service, free tier: this repo installed as a package (service/app.py
+# imports null/ directly -- see service/requirements.txt) plus fastapi/
+# uvicorn, serving service/app.py's FastAPI app. No database, no persistent
+# disk: job state lives in service/jobs.py's in-process JobManager only, by
+# design (see that module's docstring) -- a free-tier instance restart loses
+# in-flight jobs, which is an accepted tradeoff for a demo service, not an
+# oversight here.
+#
+# Deploy: connect this repo in the Render dashboard via
+# "New +" -> "Blueprint", pointing at this file. Render provisions the
+# service below and redeploys on every push to `branch`, same as the
+# showcase's Vercel project already does for site/.
+#
+# After the first deploy, set SHOWCASE_ORIGIN (see below) to the showcase's
+# real production origin so CORS in service/app.py can allow it specifically
+# -- not needed for the service to run, but needed before any cross-origin
+# fetch from the showcase to this service would be allowed.
+services:
+  - type: web
+    name: null-audit-service
+    env: python
+    plan: free
+    branch: main
+    region: oregon
+    buildCommand: pip install -r service/requirements.txt
+    startCommand: uvicorn service.app:app --host 0.0.0.0 --port $PORT --app-dir .
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # The showcase's production origin (e.g. https://null-audit.vercel.app),
+      # no trailing slash. Left unset here deliberately -- filled in via the
+      # Render dashboard once that URL is known, not hardcoded into a file
+      # that would otherwise commit a guess. See service/app.py's CORS setup:
+      # unset means no CORS headers are added at all (same-origin /app still
+      # works fine; only a cross-origin fetch FROM the showcase would need
+      # this set).
+      - key: SHOWCASE_ORIGIN
+        sync: false
