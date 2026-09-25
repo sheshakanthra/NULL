@@ -49,8 +49,9 @@ from null.contracts import (
     StrategyRun,
     TargetWeight,
 )
+from null.contracts import _canonical_float
 from null.costs.india_equity import IndiaEquityCostModel
-from null.costs.model import Segment, Side
+from null.costs.model import Segment
 from null.metrics import TRADING_DAYS
 
 __all__ = [
@@ -187,6 +188,141 @@ def generate_weights_for_symbol(
     return out
 
 
+def _cost_drag_vectorized(
+    *,
+    weight_matrix: npt.NDArray[np.float64],
+    prices: npt.NDArray[np.float64],
+    adv: npt.NDArray[np.float64],
+    costs: IndiaEquityCostModel,
+    initial_capital: float,
+    segment: Segment,
+    sigma_daily: float,
+) -> npt.NDArray[np.float64]:
+    """Per-day cost drag as a fraction of equity -- a numpy-vectorised
+    restatement of the exact arithmetic ``IndiaEquityCostModel.charge()``
+    does per (day, symbol) cell, not a re-derivation of the cost model.
+
+    Replaced a ~20-million-iteration pure-Python loop (day x symbol x
+    variant across the real 108-variant grid) that held the GIL for minutes
+    on a free-tier CPU -- see docs/findings.md and service/jobs.py's module
+    docstring for the production incident this caused. Every operation here
+    mirrors the scalar version's sequence exactly (same order: traded ->
+    quantity -> notional -> each charge component -> sum), because
+    ``evidence_hash`` for the committed grid is pinned to this function's
+    output and a numerically-equivalent-but-differently-ordered computation
+    is exactly the kind of change that pinning exists to catch. Verified
+    byte-identical against the committed artifact after this change; see
+    docs/findings.md.
+
+    ``equity`` is ``initial_capital`` for every cell -- the scalar version
+    never updated it from realised P&L either (a pre-existing property of
+    this strategy's accounting, not something this vectorisation changed),
+    which is what makes each day's cost independent of every other day's
+    and safe to compute as one array operation instead of a running loop.
+    """
+    equity = initial_capital
+    n_days, n_symbols = weight_matrix.shape
+
+    previous = np.vstack([np.zeros((1, n_symbols), dtype=np.float64), weight_matrix[:-1]])
+    delta = np.abs(weight_matrix - previous)
+
+    row_price = prices[1:]
+    row_adv = adv[1:]
+
+    valid_price = np.isfinite(row_price) & (row_price > 0.0)
+    active = (delta > 0.0) & valid_price
+
+    # Real price where valid; an arbitrary positive placeholder elsewhere,
+    # to avoid a division by zero for cells `active` will zero out anyway.
+    safe_price = np.where(valid_price, row_price, 1.0)
+    traded = delta * equity
+    quantity = traded / safe_price
+    notional = quantity * safe_price
+
+    is_buy = weight_matrix > previous
+
+    has_adv = np.isfinite(row_adv) & (row_adv > 0.0)
+    adv_used = np.where(has_adv, row_adv, 1.0)
+
+    rates = costs.config.segments[segment]
+    if rates.brokerage_pct > 0.0:
+        brokerage = np.minimum(
+            notional * rates.brokerage_pct / 100.0, rates.brokerage_per_order_cap
+        )
+    else:
+        brokerage = np.zeros_like(notional)
+
+    stt_pct = np.where(is_buy, rates.stt_buy_pct, rates.stt_sell_pct)
+    stt = notional * stt_pct / 100.0
+    exchange_txn = notional * rates.exchange_txn_pct / 100.0
+    sebi_turnover = notional * rates.sebi_turnover_pct / 100.0
+    stamp_duty = np.where(is_buy, notional * rates.stamp_duty_buy_pct / 100.0, 0.0)
+
+    # GST on brokerage + exchange txn + SEBI turnover only -- see
+    # null/costs/india_equity.py's charge(), which this mirrors exactly.
+    gst = (brokerage + exchange_txn + sebi_turnover) * rates.gst_pct / 100.0
+    dp_charge = np.where(is_buy, 0.0, rates.dp_charge_per_scrip_per_sell)
+
+    slippage_cfg = costs.config.slippage
+    tiers = slippage_cfg.liquidity_tiers  # ordered most to least liquid
+    half_spread_bps = np.select(
+        [adv_used >= tier.min_adv for tier in tiers],
+        [np.full_like(notional, tier.half_spread_bps) for tier in tiers],
+        default=tiers[-1].half_spread_bps,
+    )
+    # order_value=notional, adv_20=adv_used: adv_used is always > 0 (the
+    # has_adv fallback above), so this never needs slippage.py's own
+    # adv_20 <= 0 guard -- that branch existed for a caller that might pass
+    # a non-positive adv_20 directly, which this call site never does.
+    participation = notional / adv_used
+    impact_bps = slippage_cfg.impact_k * sigma_daily * np.sqrt(participation) * 1e4
+    slippage = notional * (half_spread_bps + impact_bps) / 1e4
+
+    # The scalar version builds a ChargeBreakdown -- a frozen NullModel --
+    # per cell, and every one of its float fields is quantised to 12
+    # significant digits on construction (null/contracts.py's
+    # _canonical_float). That quantisation happens to EACH component
+    # BEFORE they're summed into .total, not to the sum afterward, and the
+    # two do not always agree: skipping it here reproduced 106 of the
+    # committed grid's 108 trial Sharpes exactly, but differed in the 13th
+    # significant digit on 2 of them -- underneath the threshold "should
+    # absorb summation-order differences" covers, not "quantise-then-sum
+    # vs raw-then-sum is always the same operation" (it isn't; quantising
+    # is a rounding step, and rounding does not commute with addition in
+    # general). Reusing null.contracts's own quantisation function, not a
+    # numeric reimplementation of %.12g rounding, is the only way to
+    # guarantee this matches the scalar path bit-for-bit -- see
+    # docs/findings.md for the full account of finding this the hard way.
+    # Only active cells need it: an inactive cell's components are exactly
+    # 0.0, and _canonical_float(0.0) is 0.0 by its own fast path, so
+    # quantising those would be a costly no-op.
+    components = (brokerage, stt, exchange_txn, sebi_turnover, stamp_duty, gst, dp_charge, slippage)
+    active_idx = np.nonzero(active)
+    total = np.zeros_like(notional)
+    for component in components:
+        quantized = component.copy()
+        quantized[active_idx] = [_canonical_float(v) for v in component[active_idx]]
+        total = total + quantized
+    total = np.where(active, total, 0.0)
+
+    # Sequential column-by-column accumulation, not total.sum(axis=1):
+    # numpy's own reduction can pick a different internal summation order
+    # (e.g. pairwise/SIMD-chunked) than left-to-right, and while that's
+    # normally within the 12-significant-digit quantisation's tolerance, it
+    # measurably wasn't for 2 of the committed grid's 108 variants (~1e-13,
+    # right at the rounding boundary). This loop is over symbols (~50), not
+    # days x symbols x variants -- a few dozen vectorised array additions,
+    # not the O(20M) scalar loop this function replaced -- and it reproduces
+    # the scalar version's exact accumulation order: day_cost += charge.total
+    # for each symbol in turn.
+    day_cost = np.zeros(n_days, dtype=np.float64)
+    for col in range(n_symbols):
+        day_cost = day_cost + total[:, col]
+    if equity > 0.0:
+        return np.asarray(day_cost / equity, dtype=np.float64)
+    return np.zeros(n_days, dtype=np.float64)
+
+
 @dataclass(frozen=True)
 class VariantResult:
     variant: GridVariant
@@ -267,35 +403,15 @@ def run_variant(
 
     gross = np.einsum("ij,ij->i", weight_matrix, asset_returns)
 
-    equity = initial_capital
-    cost_drag = np.zeros(gross.shape[0], dtype=np.float64)
-    previous = np.zeros(len(universe), dtype=np.float64)
-    for i in range(weight_matrix.shape[0]):
-        row_price = prices[i + 1]
-        row_adv = adv[i + 1]
-        day_cost = 0.0
-        for j, symbol in enumerate(universe):
-            delta = abs(float(weight_matrix[i, j]) - float(previous[j]))
-            if delta <= 0.0:
-                continue
-            price = float(row_price[j])
-            if not np.isfinite(price) or price <= 0.0:
-                continue
-            traded = delta * equity
-            symbol_adv = float(row_adv[j])
-            has_adv = np.isfinite(symbol_adv) and symbol_adv > 0.0
-            charge = costs.charge(
-                symbol=symbol,
-                side=Side.BUY if weight_matrix[i, j] > previous[j] else Side.SELL,
-                quantity=traded / price,
-                price=price,
-                segment=segment,
-                sigma_daily=sigma_daily,
-                adv_20=symbol_adv if has_adv else 1.0,
-            )
-            day_cost += charge.total
-        cost_drag[i] = day_cost / equity if equity > 0.0 else 0.0
-        previous = weight_matrix[i].copy()
+    cost_drag = _cost_drag_vectorized(
+        weight_matrix=weight_matrix,
+        prices=prices,
+        adv=adv,
+        costs=costs,
+        initial_capital=initial_capital,
+        segment=segment,
+        sigma_daily=sigma_daily,
+    )
 
     net = gross - cost_drag
     return_ts = timeline[1:]

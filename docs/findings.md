@@ -234,6 +234,96 @@ working as intended: a documented reason, a re-verified verdict, not a silent up
 
 ---
 
+## 9. A CPU-bound thread starved the process that was supposed to answer "are you alive"
+
+Production, Render free tier. A submitted audit ran — the live page showed gates
+RUNNING, elapsed climbing — and then the client got a 404: "the job could not be
+found." The job store's own eviction logic was innocent (a running job's
+`finished_at` is `None` for its entire run and was never a candidate — a test
+already proved that before this incident, and still does). The job wasn't evicted.
+It was **gone**, because the process holding it was gone.
+
+`service/jobs.py`'s background worker ran each audit's ~20-million-iteration,
+GIL-holding, pure-Python cost loop on a **thread in the same process** that was
+also supposed to answer `GET /health`. On a real machine with real cores this
+mostly hides — CPython switches threads roughly every 5ms regardless of what's
+running. On a free-tier instance with a fraction of a CPU, the *process itself*
+can be denied wall-clock time for stretches long enough that nothing inside it —
+not the audit thread, not the health-check thread, nothing — gets to run. Render's
+own health check reads that as "unresponsive" and restarts the instance, which
+wipes an in-memory job table by design (the documented tradeoff of not running
+Celery/Redis) — except the trigger wasn't a deploy or a crash, it was the
+service's own workload starving its own liveness check.
+
+The fix is one line with a completely different reliability property: the audit
+now runs in a genuinely separate OS process (`ProcessPoolExecutor`), so however
+hard it spins, this process's own ability to answer `/health` never depends on
+the same GIL. `tests/service/test_app.py`'s
+`test_health_stays_responsive_while_a_job_is_running` pins this directly — not
+"the job eventually finishes," but "`/health` answers in under a second while a
+CPU-bound job is running," the exact property that failed in production.
+
+**What made this hard to catch locally:** every earlier test of the job layer
+(queued → running → done, the 429 cap, TTL eviction) used `threading.Event`-gated
+blockers and measured `JobManager.get()`'s own responsiveness — which was never
+the problem, because a `threading.Lock.acquire()` from a third thread still gets
+scheduled promptly even under GIL contention. The actual failure mode only shows
+up one layer up, at the HTTP surface, under real resource constraint. Local
+development on unconstrained hardware cannot produce the condition that triggers
+the bug; only a genuinely CPU-starved environment can, which is exactly the free
+tier this service runs on and exactly what a laptop is not.
+
+## 10. Quantise-then-sum is not sum-then-quantise, and vectorising skipped the quantising
+
+Vectorising the same cost loop (item 9's fix made it *safe*; this made it *fast* —
+the highest-leverage half of the same incident) replaced ~20 million scalar
+`IndiaEquityCostModel.charge()` calls, each building a `ChargeBreakdown`, with
+numpy array arithmetic over the whole day × symbol grid at once. First attempt
+reproduced 106 of the committed grid's 108 trial Sharpes exactly and differed
+from the other 2 in the 13th significant digit (~1e-13) — enough to change
+`evidence_hash`, nowhere near enough to change any gate's pass/fail.
+
+The instinctive suspect was summation order — numpy's `array.sum()` doesn't
+necessarily add left-to-right the way a Python `for` loop does, and CLAUDE.md's
+own contracts.py comment names exactly this class of noise ("different BLAS
+builds disagree in the last bits of a float"). Replacing the reduction with an
+explicit column-by-column accumulation, matching the scalar loop's order exactly,
+changed **nothing** — same two variants, same magnitude, to the bit. A clean
+negative result, and worth recording as one: it ruled out a real hypothesis
+instead of leaving it unconfirmed.
+
+The actual cause: `ChargeBreakdown` is a frozen `NullModel`, and every one of its
+float fields — brokerage, STT, exchange charges, slippage, each one — is
+quantised to 12 significant digits **individually, before** they are summed into
+`.total`. The vectorised version computed each component in full float64
+precision and summed *those*, then let the final Series-level quantisation catch
+it — which is quantising the sum, not summing the quantised parts. Those are not
+the same operation; rounding does not commute with addition. For 106 of 108
+variants the difference was too small to survive 12-significant-digit rounding
+either way. For 2, it sat close enough to a rounding boundary that it didn't.
+
+Fixed by quantising each of the 8 components individually before summing —
+reusing `null.contracts`'s own `_canonical_float`, not a numeric
+reimplementation of its `%.12g` rounding, because a *close* reimplementation is
+exactly how a second, subtly different quantisation function enters the
+codebase and this bug recurs a third time in a new shape. Verified
+byte-identical against the committed `run.json`, `run.trials.parquet`, and
+`sensitivity.json` afterward — not just the trial Sharpes that first exposed
+the gap, every byte the committed grid produces.
+
+**Why the 12-significant-digit tolerance didn't just absorb this**, which was
+the working assumption going in: quantisation absorbs noise *at the point it's
+applied* — the same value computed two numerically-equivalent-but
+differently-ordered ways, rounded to 12 digits, usually lands on the same
+representable value. It does not absorb a **different quantisation schedule** —
+rounding 8 numbers then adding them is a different function from adding 8
+numbers then rounding the sum, and no amount of precision in either path makes
+those two functions equal at every input, only close. "Should absorb
+summation-order differences" was correct; it was never a general license to
+skip *which* values get rounded and when.
+
+---
+
 ## The pattern
 
 **Items 2 and 4 are the same shape.** In both, a test covering the defective path
