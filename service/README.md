@@ -249,12 +249,32 @@ weights for the other 107 (`run_variant`'s `include_weights` flag), cutting
 peak RSS to **876MB** -- verified, not estimated (`psutil`, sampled every
 50ms on a real `ProcessPoolExecutor` worker). `service/jobs.py`'s worker
 pool also gained `max_tasks_per_child=1`, so nothing a job allocates and
-doesn't clean up survives into the next job's baseline. Full account,
-including a hoisting fix that helped speed but *not* memory (a useful
-negative result), and the honest remaining gap against the original 350MB
-target, in `docs/findings.md` #11.
+doesn't clean up survives into the next job's baseline. This deployed and
+was re-verified against the live URL -- and the committed grid crashed
+production again: `running` through t+18s, then a 502 (backend
+unreachable, mid-restart), then a wiped job table (404, "unknown, or its
+result has expired") for the rest of the poll window. 876MB on a 512MB
+container, next to the web process's own baseline, was never going to fit.
+
+**Incident 2, continued -- the Bar-lifetime fix.** Granular checkpointing
+placed the remaining dominant cost precisely: ~297MB from
+`null.data.ohlcv.load_bars` materialising ~176,000 `null.contracts.Bar`
+Pydantic objects for the real NIFTY 50 universe. `null.verdict.engine`'s
+leakage checks genuinely need real `Bar` objects (frozen/shared engine
+code, out of scope to change), but the grid search's own internal use of
+`bars` only ever read `ts`, `symbol`, `close` and `adv_20` off each one.
+`run_grid` (`examples/rsi2_nifty/strategy.py`) now extracts those into
+plain tuples/numpy arrays up front and both it and its caller
+(`run_backtest` in `service/backtest/rsi2.py`) explicitly drop their
+reference to the full `bars` tuple before the 108-variant loop runs, so the
+~297MB Bar tuple's lifetime no longer overlaps the grid search's own
+working set. Cut peak RSS again: **876MB -> 531.4MB**, hash and verdict
+unchanged (`baff7b68...`, REJECT). Still above the original 350MB target,
+and still close enough to the 512MB container limit -- before the web
+process's own baseline -- to need its own production verification; see the
+session report for that result. Full account in `docs/findings.md` #11.
 `tests/examples/test_memory_budget.py` is the regression guard: fails if
-the committed grid's real worker-process peak RSS regresses past 1100MB.
+the committed grid's real worker-process peak RSS regresses past 650MB.
 
 The earlier client-side mitigations (10-minute poll ceiling, tolerating a
 few consecutive 404s, the TTL grace window) all stay -- good defence in
@@ -270,6 +290,7 @@ either incident; the process boundary and the memory fixes are.
 | + vectorised cost loop | **49.0s**, byte-identical `run.json` / `run.trials.parquet` / `sensitivity.json`, hash unchanged (`baff7b68...`) | unchanged by vectorisation alone |
 | + weights-retention fix | no change | **876MB** (52% reduction) |
 | + panel/timeline hoisting | faster (fewer redundant matrix rebuilds); not separately re-timed after the weights fix | ~880MB -- no measurable change; this fix was never about memory (see `docs/findings.md` #11's negative result) |
+| + Bar-lifetime fix | not separately re-timed | **531.4MB** (a further 40% reduction; 71% below the original 1845MB baseline) |
 
 Production (Render, live URL) timing and memory, once verified against the
 deployed instance, are in the session report.

@@ -2,23 +2,34 @@
 
 Render's free tier (512MB) OOM'd one minute after a deploy went live running
 the committed 108-variant grid: peak worker-process RSS measured 1845MB
-before this fix, dominated by every VariantResult in a 108-entry list
+before any fix, dominated by every VariantResult in a 108-entry list
 retaining its own full weight-change list (thousands of TargetWeight
 objects for a high-turnover strategy, times 108). Fixed in
 examples/rsi2_nifty/strategy.py (run_grid only keeps the best variant's
 weights; a service/jobs.py using ProcessPoolExecutor's max_tasks_per_child=1
-so nothing survives between jobs either) -- brought peak to ~880MB.
+so nothing survives between jobs either) -- brought peak to ~880MB, and
+production still crashed on the committed grid (502 then a wiped job
+table -- the process restarted mid-run).
 
-That is NOT the original 350MB target. The remaining, now-dominant cost is
-~297MB of null.contracts.Bar Pydantic object overhead for the ~176,000 Bar
-objects the real NIFTY 50 universe loads (measured directly: RSS jumps from
-~150MB to ~445MB across exactly the null.data.ohlcv.load_bars call and
-nothing else). Bar is a frozen contract (CLAUDE.md invariant 5); reducing
-this further means either not materialising Bar objects for the grid
-search's own use or some other restructuring of null/data/ohlcv.py's
-loading path -- outside what this fix was authorised to change unilaterally.
-This test is a regression guard against the 1845MB baseline, not a claim
-that 350MB is met; see the session record for the open question.
+The remaining, then-dominant cost was ~297MB of null.contracts.Bar
+Pydantic object overhead for the ~176,000 Bar objects the real NIFTY 50
+universe loads. Bar itself is a frozen contract (CLAUDE.md invariant 5) and
+null.verdict.engine's leakage checks genuinely need real Bar objects, so
+that construction can't be skipped -- but the grid search's own internal
+use (RSI, the weight schedule, the cost model) only ever read ``ts``,
+``symbol``, ``close`` and ``adv_20`` off a Bar. run_grid now extracts those
+into plain tuples/numpy arrays up front and drops its reference to the full
+``bars`` tuple (and its caller, service/backtest/rsi2.py's run_backtest,
+drops its own reference too) before the 108-variant loop runs, instead of
+holding the full Bar tuple and the grid search's own working set at once.
+That brought peak to 531.4MB.
+
+That is still above the original 350MB target, and close enough to
+Render's 512MB whole-container limit that the web process's own baseline
+RSS (~150-160MB) on top of it may still be tight. This test is a
+regression guard against the ~880MB pre-this-fix baseline, not a claim
+that 350MB -- or even a safe margin under 512MB -- is met; see the session
+record for production verification of this specific fix.
 """
 
 from __future__ import annotations
@@ -32,12 +43,12 @@ from typing import Any
 import psutil
 import pytest
 
-#: Comfortably above the ~880MB measured after the weights-retention and
-#: panel-hoisting fixes (real machine variance observed: ~876-883MB across
-#: repeated measurements), comfortably below the 1845MB pre-fix baseline.
-#: Catches a regression back toward "no cap on what a variant retains", not
-#: a claim the original 350MB target is met -- see the module docstring.
-PEAK_RSS_BUDGET_MB = 1100.0
+#: Comfortably above the 531.4MB measured after the Bar-lifetime fix (see
+#: the module docstring), comfortably below the ~880MB this fix improved on.
+#: Catches a regression back toward "the full-universe Bar tuple stays
+#: resident through the grid search", not a claim the original 350MB target
+#: -- or a safe margin under Render's 512MB container limit -- is met.
+PEAK_RSS_BUDGET_MB = 650.0
 
 COMMITTED_HASH = "baff7b685ddcace89b71c6fb3d93182c992c8362b0c4d28889896bead3e498a9"
 

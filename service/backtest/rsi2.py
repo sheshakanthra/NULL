@@ -270,6 +270,11 @@ def run_backtest(spec: GridSpec, out_dir: Path) -> BacktestArtifacts:
         initial_capital=INITIAL_CAPITAL,
         variants=variants,
     )
+    # run_grid drops its own reference to `bars` once it's done with it (see
+    # that function's docstring); this drops the caller's, so the ~300MB
+    # full-universe Bar tuple is freed here rather than staying resident for
+    # the rest of this function. docs/findings.md #11.
+    del bars
 
     out_dir.mkdir(parents=True, exist_ok=True)
 

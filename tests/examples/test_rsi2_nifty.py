@@ -102,10 +102,11 @@ def test_rsi_is_bounded_zero_to_hundred_on_a_realistic_walk() -> None:
 
 def test_enters_on_rsi_below_entry_and_exits_on_rsi_above_exit() -> None:
     bars = _bars("AAA", [100.0] * 10)
+    timestamps = [b.ts for b in bars]
     # Hand-crafted RSI: dips under 5 at bar 3, climbs over 70 at bar 7.
     rsi = np.array([np.nan, np.nan, 50.0, 3.0, 10.0, 40.0, 65.0, 75.0, 80.0, 60.0])
     weights = generate_weights_for_symbol(
-        bars, rsi, entry=5, exit=70, holding_cap=100, weight_when_long=0.5
+        timestamps, "AAA", rsi, entry=5, exit=70, holding_cap=100, weight_when_long=0.5
     )
     assert len(weights) == 2
     assert weights[0].symbol == "AAA" and weights[0].weight == pytest.approx(0.5)
@@ -116,13 +117,14 @@ def test_enters_on_rsi_below_entry_and_exits_on_rsi_above_exit() -> None:
 
 def test_holding_cap_forces_an_exit_even_if_rsi_never_recovers() -> None:
     bars = _bars("AAA", [100.0] * 10)
+    timestamps = [b.ts for b in bars]
     # RSI stays low (never crosses the exit threshold) through the holding window,
     # then rises above entry so the forced exit is not immediately re-entered --
     # isolating the holding-cap behaviour from re-entry behaviour, which is a
     # separate, also-correct thing the strategy does (see the no-pyramiding test).
     rsi = np.array([np.nan, np.nan, 50.0, 3.0, 4.0, 4.0, 4.0, 40.0, 40.0, 40.0])
     weights = generate_weights_for_symbol(
-        bars, rsi, entry=5, exit=70, holding_cap=3, weight_when_long=1.0
+        timestamps, "AAA", rsi, entry=5, exit=70, holding_cap=3, weight_when_long=1.0
     )
     assert len(weights) == 2
     entry, exit_ = weights
@@ -133,9 +135,10 @@ def test_holding_cap_forces_an_exit_even_if_rsi_never_recovers() -> None:
 
 def test_no_pyramiding_while_already_long() -> None:
     bars = _bars("AAA", [100.0] * 8)
+    timestamps = [b.ts for b in bars]
     rsi = np.array([np.nan, np.nan, 3.0, 2.0, 1.0, 40.0, 75.0, 60.0])
     weights = generate_weights_for_symbol(
-        bars, rsi, entry=5, exit=70, holding_cap=100, weight_when_long=1.0
+        timestamps, "AAA", rsi, entry=5, exit=70, holding_cap=100, weight_when_long=1.0
     )
     # Only ONE entry despite RSI staying under 5 for three consecutive bars.
     entries = [w for w in weights if w.weight > 0.0]
@@ -145,9 +148,10 @@ def test_no_pyramiding_while_already_long() -> None:
 
 def test_no_signal_produces_no_weight_changes() -> None:
     bars = _bars("AAA", [100.0] * 6)
+    timestamps = [b.ts for b in bars]
     rsi = np.array([np.nan, np.nan, 50.0, 50.0, 50.0, 50.0])
     weights = generate_weights_for_symbol(
-        bars, rsi, entry=5, exit=70, holding_cap=100, weight_when_long=1.0
+        timestamps, "AAA", rsi, entry=5, exit=70, holding_cap=100, weight_when_long=1.0
     )
     assert weights == []
 

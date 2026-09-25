@@ -387,6 +387,46 @@ service — both bigger, riskier changes than fixing a memory leak, and left
 as an open, explicitly-flagged question rather than attempted under the
 pressure of an active incident.
 
+**Verified, then it wasn't fixed.** With the 880MB fix deployed, production
+was re-tested by running the committed grid against the live URL. It failed
+again: `status: running` through t+18s, then an HTTP 502 (the backend
+unreachable — the process was mid-crash), then from t+73s onward a 404
+("unknown, or its result has expired") for the rest of the poll window —
+the job table gone, meaning the process had restarted. `/health` answered
+normally again immediately after, confirming a restart rather than a
+sustained outage. This is exactly the signature the previous fix was meant
+to prevent, and it happened anyway, which is the honest result to report
+rather than the hoped-for one: an 880MB worker peak on a 512MB container,
+next to the web process's own baseline, was never going to fit regardless
+of *how* GIL-safe the isolation was.
+
+**The Bar-lifetime fix.** The open question above was picked up rather than
+deferred further: `null.verdict.engine`'s leakage checks genuinely need
+real `Bar` objects (that part of the 297MB is not avoidable without
+touching frozen/shared engine code, which was explicitly out of scope), but
+the grid search's *own* internal use of `bars` — RSI, the weight schedule,
+the cost model — only ever reads `ts`, `symbol`, `close`, and `adv_20` off
+each `Bar`. Everything else (`open`, `high`, `low`, `volume`) is validated,
+quantised, and carried in memory for the whole run without ever being read.
+`run_grid` now extracts `timestamps_by_symbol` (a plain tuple of
+timestamps, not `Bar` objects) and `closes_by_symbol` up front, and
+`generate_weights_for_symbol`/`run_variant` were changed to take those
+instead of `Bar` sequences — the RSI/entry/exit/holding-cap logic itself is
+untouched, only what it reads its timestamp from. The one place that still
+needs full `Bar` objects, `null.benchmark.buyhold`'s `_timeline`/`_panel`
+helpers (kept as-is deliberately — see that call site's docstring on the
+look-ahead bug those helpers exist to avoid reintroducing), is called once,
+early, and both `run_grid` and its caller (`run_backtest` in
+`service/backtest/rsi2.py`) then explicitly `del bars` before the
+108-variant loop starts — so the ~297MB full-universe `Bar` tuple's
+lifetime no longer overlaps the grid search's own working set. Measured
+result: **880MB → 531.4MB**, hash and verdict unchanged
+(`baff7b68…`, REJECT). Still above the original 350MB target, and still
+close enough to the 512MB container limit — before the web process's own
+baseline is added — that this needs its own production verification before
+being called fixed; see the session record for that result rather than
+assuming this number alone settles it.
+
 ## The pattern
 
 **Items 2 and 4 are the same shape.** In both, a test covering the defective path

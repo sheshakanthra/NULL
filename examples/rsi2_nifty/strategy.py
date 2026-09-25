@@ -150,7 +150,8 @@ ALL_VARIANTS: tuple[GridVariant, ...] = _build_grid()
 
 
 def generate_weights_for_symbol(
-    bars: Sequence[Bar],
+    timestamps: Sequence[datetime],
+    symbol: str,
     rsi: npt.NDArray[np.float64],
     *,
     entry: int,
@@ -164,26 +165,32 @@ def generate_weights_for_symbol(
     Long-only, no pyramiding: while already in a position, a fresh entry signal is
     ignored. Exit fires on whichever comes first, RSI crossing the exit threshold
     or the holding cap being reached.
+
+    Takes ``timestamps`` (this symbol's own bar calendar, index-aligned with
+    ``rsi``) rather than the ``Bar`` objects themselves -- the only two Bar
+    fields this ever read were ``ts`` and ``symbol``, and ``symbol`` is
+    constant across the whole call. See ``run_grid``'s docstring for why that
+    matters for memory.
     """
     out: list[TargetWeight] = []
     in_position = False
     bars_held = 0
 
-    for i, bar in enumerate(bars):
+    for i, ts in enumerate(timestamps):
         value = rsi[i]
         if np.isnan(value):
             continue
 
         if not in_position:
             if value < entry:
-                out.append(TargetWeight(ts=bar.ts, symbol=bar.symbol, weight=weight_when_long))
+                out.append(TargetWeight(ts=ts, symbol=symbol, weight=weight_when_long))
                 in_position = True
                 bars_held = 0
             continue
 
         bars_held += 1
         if value > exit or bars_held >= holding_cap:
-            out.append(TargetWeight(ts=bar.ts, symbol=bar.symbol, weight=0.0))
+            out.append(TargetWeight(ts=ts, symbol=symbol, weight=0.0))
             in_position = False
 
     return out
@@ -360,7 +367,7 @@ def run_variant(
     asset_returns: npt.NDArray[np.float64],
     universe: tuple[str, ...],
     rsi_by_symbol: dict[str, npt.NDArray[np.float64]],
-    bars_by_symbol: dict[str, tuple[Bar, ...]],
+    timestamps_by_symbol: dict[str, tuple[datetime, ...]],
     costs: IndiaEquityCostModel,
     initial_capital: float,
     segment: Segment = Segment.EQUITY_DELIVERY,
@@ -401,7 +408,8 @@ def run_variant(
     for symbol in universe:
         weights.extend(
             generate_weights_for_symbol(
-                bars_by_symbol[symbol],
+                timestamps_by_symbol[symbol],
+                symbol,
                 rsi_by_symbol[symbol],
                 entry=variant.entry,
                 exit=variant.exit,
@@ -474,14 +482,24 @@ def run_grid(
     bars_by_symbol_raw: dict[str, list[Bar]] = {}
     for bar in bars:
         bars_by_symbol_raw.setdefault(bar.symbol, []).append(bar)
-    bars_by_symbol: dict[str, tuple[Bar, ...]] = {
-        s: tuple(sorted(v, key=lambda b: b.ts)) for s, v in bars_by_symbol_raw.items()
+    sorted_bars_by_symbol: dict[str, list[Bar]] = {
+        s: sorted(v, key=lambda b: b.ts) for s, v in bars_by_symbol_raw.items()
     }
+    del bars_by_symbol_raw
 
+    # Only ts and close/adv (the latter via _bh._panel below) are ever read off
+    # a Bar in this function -- everything past this point works off these two
+    # plain structures instead of the Bar objects themselves, so the full
+    # per-symbol Bar lists can be dropped once they're built rather than kept
+    # alive for the rest of the grid search. See the `del bars` note below.
+    timestamps_by_symbol: dict[str, tuple[datetime, ...]] = {
+        s: tuple(b.ts for b in v) for s, v in sorted_bars_by_symbol.items()
+    }
     closes_by_symbol = {
         s: np.asarray([b.close for b in v], dtype=np.float64)
-        for s, v in bars_by_symbol.items()
+        for s, v in sorted_bars_by_symbol.items()
     }
+    del sorted_bars_by_symbol
 
     periods_needed = sorted({variant.period for variant in variants})
     rsi_cache: dict[tuple[str, int], npt.NDArray[np.float64]] = {}
@@ -491,7 +509,7 @@ def run_grid(
         for period in periods_needed:
             rsi_cache[(symbol, period)] = compute_rsi(closes_by_symbol[symbol], period)
 
-    effective_universe = tuple(s for s in universe if s in bars_by_symbol)
+    effective_universe = tuple(s for s in universe if s in timestamps_by_symbol)
 
     # Computed once, not once per variant: identical for every variant in
     # this grid (function only of `bars` and `effective_universe`, neither
@@ -502,6 +520,15 @@ def run_grid(
     timeline = _bh._timeline(bars)
     prices, adv = _bh._panel(bars, timeline, effective_universe)
     asset_returns = _bh._returns_matrix(prices)
+
+    # Every remaining use in this function reads timeline/prices/adv/
+    # asset_returns/timestamps_by_symbol/closes_by_symbol/rsi_cache, never
+    # `bars` itself again -- dropping it here (the caller does the same right
+    # after this call returns) frees the full-universe Bar tuple, ~300MB on
+    # the real NIFTY 50 window, before the 108-variant loop's own working set
+    # grows, instead of holding both peaks at once. This was the dominant
+    # remaining cost in the OOM investigated in docs/findings.md #11.
+    del bars
 
     # include_weights=False for every variant here: run_variant still builds
     # the full weight-change list internally (it has to, to construct
@@ -528,7 +555,7 @@ def run_grid(
             asset_returns=asset_returns,
             universe=effective_universe,
             rsi_by_symbol=rsi_by_symbol,
-            bars_by_symbol=bars_by_symbol,
+            timestamps_by_symbol=timestamps_by_symbol,
             costs=costs,
             initial_capital=initial_capital,
             include_weights=False,
@@ -558,7 +585,7 @@ def run_grid(
             asset_returns=asset_returns,
             universe=effective_universe,
             rsi_by_symbol=rsi_by_symbol,
-            bars_by_symbol=bars_by_symbol,
+            timestamps_by_symbol=timestamps_by_symbol,
             costs=costs,
             initial_capital=initial_capital,
             include_weights=True,
