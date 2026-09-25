@@ -324,6 +324,69 @@ skip *which* values get rounded and when.
 
 ---
 
+## 11. Fixing the crash didn't fix the outage — it was memory, not the GIL
+
+Item 9's fix (audits run in a separate process) shipped, and the very next
+production run OOM'd anyway. Render's own event log named it precisely:
+"Ran out of memory (used over 512MB)," one minute after deploy. Not the GIL
+starving `/health` — the health check was never reached, because the
+*worker process itself* exceeded the container's memory before it got that
+far. Two different diagnoses can both be true of the same symptom ("job
+vanished"); confirming the first one didn't mean the second one wasn't
+also real, and it was.
+
+Measured before touching anything (peak RSS of a real `ProcessPoolExecutor`
+worker running the committed grid, sampled every 50ms, not estimated):
+**1845MB** — over three and a half times the container's own limit, before
+the *web* process's own ~163MB is even added in. `tracemalloc`'s Python-object
+view (897MB peak) undercounted it substantially, because roughly half the
+real cost never goes through Python's own allocator at all — numpy array
+buffers, pandas/pyarrow's columnar structures.
+
+Granular checkpointing (RSS logged at each stage, not just overall peak)
+found the dominant contributor immediately: every `VariantResult` in
+`run_grid`'s 108-entry `results` list carried its own full weight-change
+list — for a high-turnover strategy, thousands of `TargetWeight` Pydantic
+instances per variant, times 108 held simultaneously. Only the *best*
+variant's weights are ever read by anything downstream
+(`write_run_artifacts`'s `best.weights`) — the other 107 sets were pure,
+enormous, unread retention. Fixed by not carrying weights into 107 of the
+108 `VariantResult`s at all (`run_variant`'s `include_weights` flag,
+defaulting to off inside the main loop), and re-running only the winning
+variant once more, cheaply, to populate its weights after the fact — the
+same value `max(results, key=...)` would have picked regardless, computed
+identically both times, so nothing about *which* variant is best, or what
+its own numbers are, changes. Cut peak RSS in half: **1845MB → 876MB**.
+
+A second pass — hoisting `_timeline`/`_panel`/`_returns_matrix` out of the
+per-variant loop (identical for every variant in a grid, they only depend
+on `bars`/`universe`; the original recomputed them fresh 108 times) —
+measurably helped nothing on peak RSS. It was never a memory bug, only a
+*speed* one (108 redundant multi-megabyte matrix rebuilds); worth fixing
+for its own sake, and a useful negative result for calibrating which
+hypotheses about "why is memory high" are actually about memory versus
+just adjacent inefficiency that happens to also involve large arrays.
+
+**What's left, unresolved by design.** After both fixes, peak RSS still sits
+around **880MB** — a real, verified, 52% reduction, and still well over
+both the original 350MB target and the 512MB container limit combined with
+the web process. Granular checkpointing places the remaining dominant cost
+precisely: RSS jumps from ~150MB to ~445MB across exactly one call,
+`null.data.ohlcv.load_bars`, loading ~176,000 `null.contracts.Bar` objects
+for the real NIFTY 50 universe — roughly 1.7KB of retained memory per Bar,
+for a model whose actual data is a timestamp, a symbol, and six numbers.
+That overhead is intrinsic to `Bar` being a validated, frozen Pydantic
+contract model (CLAUDE.md invariant 5) rather than a compact record, and to
+`load_bars` being the one shared, audited loading path both the example's
+own grid search and the real `null audit` engine use. Reducing it further
+means either the grid search stops materialising `Bar` objects for its own
+purposes (a real rewrite of `examples/rsi2_nifty/strategy.py`'s data flow,
+with the same care the DSR and quantisation fixes needed, given here) or
+`null/data/ohlcv.py`'s loading strategy changes for everyone, not just this
+service — both bigger, riskier changes than fixing a memory leak, and left
+as an open, explicitly-flagged question rather than attempted under the
+pressure of an active incident.
+
 ## The pattern
 
 **Items 2 and 4 are the same shape.** In both, a test covering the defective path

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime
 from itertools import product
 from typing import Sequence
 
@@ -326,6 +327,13 @@ def _cost_drag_vectorized(
 @dataclass(frozen=True)
 class VariantResult:
     variant: GridVariant
+    #: Empty unless explicitly requested (``run_variant``'s
+    #: ``include_weights``) -- a high-turnover variant's weight-change list
+    #: can run into the thousands of ``TargetWeight`` objects, and
+    #: ``run_grid`` only ever needs one variant's (the best's), not all of
+    #: them held simultaneously. ``n_position_changes`` below is the cheap
+    #: summary every variant keeps; this is the expensive detail only one
+    #: needs to.
     weights: tuple[TargetWeight, ...]
     gross_returns: Series
     net_returns: Series
@@ -346,7 +354,10 @@ def _annualised_sharpe(returns: npt.NDArray[np.float64], periods: int = TRADING_
 def run_variant(
     *,
     variant: GridVariant,
-    bars: tuple[Bar, ...],
+    timeline: tuple[datetime, ...],
+    prices: npt.NDArray[np.float64],
+    adv: npt.NDArray[np.float64],
+    asset_returns: npt.NDArray[np.float64],
     universe: tuple[str, ...],
     rsi_by_symbol: dict[str, npt.NDArray[np.float64]],
     bars_by_symbol: dict[str, tuple[Bar, ...]],
@@ -354,16 +365,35 @@ def run_variant(
     initial_capital: float,
     segment: Segment = Segment.EQUITY_DELIVERY,
     sigma_daily: float = 0.018,
+    include_weights: bool = True,
 ) -> VariantResult:
     """Backtest one grid point across the whole universe.
 
-    Reuses null.benchmark.buyhold's private portfolio-aggregation helpers
-    (_timeline, _panel, _returns_matrix, _weights_matrix) rather than re-deriving
-    the same weight-to-return alignment a third time in this codebase. That
-    alignment carried a real one-bar look-ahead bug earlier in this project's
-    history, found only by an analytic multi-symbol test; re-implementing it here
-    would risk reintroducing exactly that class of bug with no equivalent test
-    covering this module.
+    ``timeline``/``prices``/``adv``/``asset_returns`` come from
+    ``null.benchmark.buyhold``'s private portfolio-aggregation helpers
+    (``_timeline``, ``_panel``, ``_returns_matrix``) -- computed ONCE by
+    ``run_grid`` and passed in here, not recomputed per variant. They are
+    identical for every variant in a grid (they depend only on ``bars`` and
+    ``universe``, neither of which varies across variants); the original
+    version called ``_timeline``/``_panel``/``_returns_matrix`` fresh inside
+    this function on every one of a grid's calls, needlessly rebuilding the
+    same (days, symbols) matrices 108 times over instead of once. Reusing
+    those helpers at all (rather than re-deriving the same weight-to-return
+    alignment a third time in this codebase) is what matters for
+    correctness -- that alignment carried a real one-bar look-ahead bug
+    earlier in this project's history, found only by an analytic
+    multi-symbol test, and re-implementing it here would risk
+    reintroducing exactly that class of bug with no equivalent test
+    covering this module. *Where* they're called only matters for speed and
+    memory, which is why this changed and the correctness argument didn't.
+
+    ``include_weights=False`` (``run_grid``'s default for every variant
+    except the one that turns out best) still generates and uses the full
+    weight-change list internally -- it has to, to build ``weight_matrix``
+    -- it just doesn't carry it into the returned ``VariantResult``, so it's
+    eligible for garbage collection the moment this call returns rather than
+    living in a 108-variant list for the rest of the grid's run. See
+    ``docs/findings.md`` for the memory incident this exists to fix.
     """
     weight_when_long = 1.0 / len(universe)
 
@@ -380,10 +410,6 @@ def run_variant(
             )
         )
     weights.sort(key=lambda w: (w.ts, w.symbol))
-
-    timeline = _bh._timeline(bars)
-    prices, adv = _bh._panel(bars, timeline, universe)
-    asset_returns = _bh._returns_matrix(prices)
 
     # A real StrategyRun, not a duck-typed stand-in: _weights_matrix's signature
     # expects one, and building a genuine (if internal-only) instance is both
@@ -421,7 +447,7 @@ def run_variant(
 
     return VariantResult(
         variant=variant,
-        weights=tuple(weights),
+        weights=tuple(weights) if include_weights else (),
         gross_returns=gross_series,
         net_returns=net_series,
         gross_sharpe=_annualised_sharpe(gross),
@@ -467,24 +493,77 @@ def run_grid(
 
     effective_universe = tuple(s for s in universe if s in bars_by_symbol)
 
-    results = []
+    # Computed once, not once per variant: identical for every variant in
+    # this grid (function only of `bars` and `effective_universe`, neither
+    # of which the variant loop below ever changes). The original version
+    # had run_variant call _timeline/_panel/_returns_matrix fresh on every
+    # one of a grid's calls -- 108 rebuilds of the same (days, symbols)
+    # matrices instead of one. See run_variant's own docstring.
+    timeline = _bh._timeline(bars)
+    prices, adv = _bh._panel(bars, timeline, effective_universe)
+    asset_returns = _bh._returns_matrix(prices)
+
+    # include_weights=False for every variant here: run_variant still builds
+    # the full weight-change list internally (it has to, to construct
+    # weight_matrix), but doesn't carry it into the returned VariantResult,
+    # so it's freed once that call returns rather than living in `results`
+    # for the rest of the grid. Only the best variant's weights are ever
+    # read by any caller (write_run_artifacts's `best.weights`) -- holding
+    # all of them for a 108-variant, high-turnover grid simultaneously was
+    # the dominant contributor to a real out-of-memory production incident;
+    # see docs/findings.md.
+    results: list[VariantResult] = []
+    best_idx: int | None = None
     for variant in variants:
         rsi_by_symbol = {
             symbol: rsi_cache[(symbol, variant.period)]
             for symbol in effective_universe
             if (symbol, variant.period) in rsi_cache
         }
-        results.append(
-            run_variant(
-                variant=variant,
-                bars=bars,
-                universe=effective_universe,
-                rsi_by_symbol=rsi_by_symbol,
-                bars_by_symbol=bars_by_symbol,
-                costs=costs,
-                initial_capital=initial_capital,
-            )
+        result = run_variant(
+            variant=variant,
+            timeline=timeline,
+            prices=prices,
+            adv=adv,
+            asset_returns=asset_returns,
+            universe=effective_universe,
+            rsi_by_symbol=rsi_by_symbol,
+            bars_by_symbol=bars_by_symbol,
+            costs=costs,
+            initial_capital=initial_capital,
+            include_weights=False,
         )
+        results.append(result)
+        if best_idx is None or result.net_sharpe > results[best_idx].net_sharpe:
+            best_idx = len(results) - 1
+
+    # One more run, for the variant that actually needs its weights kept --
+    # cheap relative to the 108-variant grid this follows (one extra variant
+    # out of however many were just run), and the only way to have exactly
+    # one VariantResult carrying weights without holding all of them at once
+    # along the way. Deterministic like everything else here: the identical
+    # inputs reproduce the identical VariantResult bit-for-bit.
+    if best_idx is not None:
+        best_variant = results[best_idx].variant
+        rsi_by_symbol = {
+            symbol: rsi_cache[(symbol, best_variant.period)]
+            for symbol in effective_universe
+            if (symbol, best_variant.period) in rsi_cache
+        }
+        results[best_idx] = run_variant(
+            variant=best_variant,
+            timeline=timeline,
+            prices=prices,
+            adv=adv,
+            asset_returns=asset_returns,
+            universe=effective_universe,
+            rsi_by_symbol=rsi_by_symbol,
+            bars_by_symbol=bars_by_symbol,
+            costs=costs,
+            initial_capital=initial_capital,
+            include_weights=True,
+        )
+
     return tuple(results)
 
 

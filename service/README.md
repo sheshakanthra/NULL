@@ -217,46 +217,62 @@ production incident (below).
   `service.backtest.rsi2.run_rsi2_audit` (what `POST /audit/rsi2` submits)
   and `tests/service/_support.py` (what the tests submit) for the pattern.
 
-**Incident, Render free-tier production -- root cause confirmed.** A
-submitted audit ran (gates showed RUNNING, elapsed climbing) and then the
-client got 404 -- `GET /audit/jobs/{id}` reported the job gone while it was
-still supposed to be running. The eviction logic above was never the cause
-(a running job's `finished_at` is `None` for its entire run and was never a
-candidate -- `test_only_finished_jobs_are_evicted_by_ttl` already proved
-that, before and after). The actual cause: the audit's
+**Incident 1, Render free-tier production.** A submitted audit ran (gates
+showed RUNNING, elapsed climbing) and then the client got 404 --
+`GET /audit/jobs/{id}` reported the job gone while it was still supposed to
+be running. The eviction logic above was never the cause (a running job's
+`finished_at` is `None` for its entire run and was never a candidate --
+`test_only_finished_jobs_are_evicted_by_ttl` already proved that, before
+and after). Leading hypothesis at the time: the audit's
 ~20-million-iteration pure-Python cost loop ran on a *thread in this same
-process*, and on the free tier's fraction of a CPU it plausibly denied the
-whole process -- including the thread meant to answer `/health` -- enough
-wall-clock time that Render's health check read the instance as
-unresponsive and restarted it, wiping the in-memory job table outright.
-Not a deploy, not a crash in the usual sense -- the service's own workload
-starved its own liveness check. Full account in `docs/findings.md` #9.
-
-Fixed at the actual point of failure: jobs now run in a separate process
+process*, plausibly denying the whole process -- including the thread
+meant to answer `/health` -- enough wall-clock time on the free tier's
+fraction of a CPU that Render's health check read the instance as
+unresponsive and restarted it. Fixed by running jobs in a separate process
 (above), so this process's own responsiveness never depends on the same
 GIL an audit is spinning on --
 `test_health_stays_responsive_while_a_job_is_running` in
-`tests/service/test_app.py` pins exactly this (`/health` answers in under a
-second while a genuinely CPU-bound job is running). Separately, the
-~20-million-iteration loop itself was vectorised with numpy (`examples/
-rsi2_nifty/strategy.py`'s `run_variant`) -- see "Before/after timing"
-below and `docs/findings.md` #10 for the numerically-tricky part of getting
-that to reproduce the committed `evidence_hash` exactly. The earlier
-client-side mitigations (10-minute poll ceiling, tolerating a few
-consecutive 404s, the TTL grace window) all stay -- they're good defence in
+`tests/service/test_app.py` pins exactly this. Full account in
+`docs/findings.md` #9. A real, worthwhile fix on its own merits -- but
+deployed, the very next production run OOM'd anyway.
+
+**Incident 2, same deploy, one minute later -- the actual cause.** Render's
+own event log named it precisely: "Ran out of memory (used over 512MB)."
+Not the GIL: the worker process's own peak memory, measured directly
+afterward at **1845MB**, over 3.5x the container's limit before the web
+process's own ~163MB is even added. Root cause: `run_grid` (`examples/
+rsi2_nifty/strategy.py`) held every one of 108 `VariantResult`s' full
+weight-change list simultaneously -- for a high-turnover strategy,
+thousands of `TargetWeight` objects per variant, times 108 -- when only the
+*best* variant's weights are ever read by anything. Fixed by not carrying
+weights for the other 107 (`run_variant`'s `include_weights` flag), cutting
+peak RSS to **876MB** -- verified, not estimated (`psutil`, sampled every
+50ms on a real `ProcessPoolExecutor` worker). `service/jobs.py`'s worker
+pool also gained `max_tasks_per_child=1`, so nothing a job allocates and
+doesn't clean up survives into the next job's baseline. Full account,
+including a hoisting fix that helped speed but *not* memory (a useful
+negative result), and the honest remaining gap against the original 350MB
+target, in `docs/findings.md` #11.
+`tests/examples/test_memory_budget.py` is the regression guard: fails if
+the committed grid's real worker-process peak RSS regresses past 1100MB.
+
+The earlier client-side mitigations (10-minute poll ceiling, tolerating a
+few consecutive 404s, the TTL grace window) all stay -- good defence in
 depth for a slow-but-not-crashed job -- but they were never the fix for
-this incident; the process boundary and the vectorisation are.
+either incident; the process boundary and the memory fixes are.
 
-### Before/after timing (the committed 108-variant grid)
+### Before/after (the committed 108-variant grid)
 
-| | time |
-|---|---|
-| Original (thread, scalar cost loop) | ~74-90s on this session's dev machine when unloaded; ~200s observed under heavier load on the same machine, no code change in between -- the free-tier timing problem was never purely about Render, this machine's own variance made that visible |
-| + process isolation only | no meaningful change to the audit's own runtime (a process boundary adds low-single-digit-seconds of one-time interpreter/import overhead, then runs at the same speed) -- its effect is entirely on *process survivability*, not speed |
-| + vectorised cost loop | **49.0s**, byte-identical `run.json` / `run.trials.parquet` / `sensitivity.json`, hash unchanged (`baff7b68...`) |
+| | time | worker peak RSS |
+|---|---|---|
+| Original (thread, scalar cost loop) | ~74-90s unloaded, ~200s under heavier load on the same machine, no code change in between -- the timing problem was never purely about Render, this machine's own variance made that visible | **1845MB** (measured after the fact, from the incident) |
+| + process isolation | no meaningful runtime change (its effect is *survivability* under GIL contention, not speed or memory) | not separately measured -- superseded by the memory fixes below before a clean baseline was taken |
+| + vectorised cost loop | **49.0s**, byte-identical `run.json` / `run.trials.parquet` / `sensitivity.json`, hash unchanged (`baff7b68...`) | unchanged by vectorisation alone |
+| + weights-retention fix | no change | **876MB** (52% reduction) |
+| + panel/timeline hoisting | faster (fewer redundant matrix rebuilds); not separately re-timed after the weights fix | ~880MB -- no measurable change; this fix was never about memory (see `docs/findings.md` #11's negative result) |
 
-Production (Render, live URL) timing is in the session report once verified
-against the deployed instance.
+Production (Render, live URL) timing and memory, once verified against the
+deployed instance, are in the session report.
 
 ## Tests
 

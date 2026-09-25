@@ -33,6 +33,10 @@ dev = [
     "mypy>=1.10",
     "pandas-stubs>=2.2",
     "types-PyYAML>=6.0",
+    # For the worker-process peak-RSS regression test (docs/findings.md #11)
+    # -- measuring what actually OOM'd Render needs real RSS, not
+    # tracemalloc's Python-object-only view.
+    "psutil>=5.9",
 ]
 
 [project.scripts]

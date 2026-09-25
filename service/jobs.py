@@ -150,8 +150,16 @@ class JobManager:
         self._lock = threading.Lock()
         #: The actual work happens here, not on the supervisor threads below
         #: -- see the module docstring for why. max_workers processes, same
-        #: cap as the thread pool it backs.
-        self._process_pool = ProcessPoolExecutor(max_workers=max_workers)
+        #: cap as the thread pool it backs. max_tasks_per_child=1: a worker
+        #: process is torn down and a fresh one spawned after every job, so
+        #: nothing a job allocates and doesn't clean up (fragmentation,
+        #: caches numpy/pandas/pyarrow keep warm, anything CPython's
+        #: allocator hasn't returned to the OS) survives into the next job's
+        #: baseline. A free-tier instance OOM'd running a single job at
+        #: ~1.8GB peak RSS before the memory fixes in docs/findings.md --
+        #: recycling the process is what keeps that from ever compounding
+        #: across jobs, on top of (not instead of) reducing that peak itself.
+        self._process_pool = ProcessPoolExecutor(max_workers=max_workers, max_tasks_per_child=1)
         self._workers = [
             threading.Thread(target=self._worker_loop, daemon=True, name=f"audit-worker-{i}")
             for i in range(max_workers)
