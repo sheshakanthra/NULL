@@ -269,10 +269,33 @@ plain tuples/numpy arrays up front and both it and its caller
 reference to the full `bars` tuple before the 108-variant loop runs, so the
 ~297MB Bar tuple's lifetime no longer overlaps the grid search's own
 working set. Cut peak RSS again: **876MB -> 531.4MB**, hash and verdict
-unchanged (`baff7b68...`, REJECT). Still above the original 350MB target,
-and still close enough to the 512MB container limit -- before the web
-process's own baseline -- to need its own production verification; see the
-session report for that result. Full account in `docs/findings.md` #11.
+unchanged (`baff7b68...`, REJECT). This deployed and was re-verified
+against the live URL -- and crashed again, same signature.
+
+**Incident 2, continued again -- the duplicate load.** Granular
+checkpointing pinned the entire remaining jump (+280.7MB) to one call:
+`null/cli.py`'s `run_audit_command` loading its *own* fresh copy of the
+same ~176,000 `Bar` objects the grid search had already loaded and used,
+independently. Fixed by extracting that function's orchestration (leakage
+short-circuit, `build_evidence`, `evaluate`, write the three artifacts)
+into `null.cli.run_audit(run, *, bars=None, benchmark_bars=None, ...)` --
+loads bars only when not supplied -- with `run_audit_command` reduced to a
+thin argv wrapper around it, and `service/backtest/rsi2.py` now loading
+`bars` once and passing the same tuple to both the grid search and
+`run_audit`. Deliberately one orchestration, not two: `run_audit` is the
+single sequence both the CLI and the service call, so the leakage
+short-circuit's guarantee doesn't depend on which caller you're looking at
+-- `tests/unit/test_cli.py` proves the short-circuit fires for both.
+Measured result: **531.4MB -> 529.2MB** -- essentially unchanged. Honest
+finding, not the hoped-for one: the two loads were already sequential in
+the old code (load, use, free; load again), so the ~280MB tuple was never
+double-counted in the *peak* -- eliminating the duplicate saves real CPU
+and allocation churn, and is worth keeping for the single-orchestration
+property alone, but it was never going to move the peak much. This avenue
+is now measured out: two rounds of restructuring how the audit path loads
+`Bar` objects, ~880MB -> ~529MB combined, real and useful, and still short
+of fitting in 512MB next to the web process's own baseline. Full account
+in `docs/findings.md` #11.
 `tests/examples/test_memory_budget.py` is the regression guard: fails if
 the committed grid's real worker-process peak RSS regresses past 650MB.
 
@@ -291,6 +314,7 @@ either incident; the process boundary and the memory fixes are.
 | + weights-retention fix | no change | **876MB** (52% reduction) |
 | + panel/timeline hoisting | faster (fewer redundant matrix rebuilds); not separately re-timed after the weights fix | ~880MB -- no measurable change; this fix was never about memory (see `docs/findings.md` #11's negative result) |
 | + Bar-lifetime fix | not separately re-timed | **531.4MB** (a further 40% reduction; 71% below the original 1845MB baseline) |
+| + duplicate-load elimination | not separately re-timed (real, but modest -- one fewer 176,000-row parse) | **529.2MB** -- essentially unchanged; the duplicate was never double-counted in the *peak*, only in total work done (see `docs/findings.md` #11) |
 
 Production (Render, live URL) timing and memory, once verified against the
 deployed instance, are in the session report.

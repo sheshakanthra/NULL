@@ -427,6 +427,47 @@ baseline is added — that this needs its own production verification before
 being called fixed; see the session record for that result rather than
 assuming this number alone settles it.
 
+**It wasn't (again).** Same production test, same signature: `running`
+through t+18s, then a 502, then the job table gone. Granular checkpointing
+pinned the entire remaining jump (225.6MB → 506.3MB, +280.7MB) to exactly
+one call: `run_audit_command` (`null/cli.py`) loading its own fresh copy of
+the same ~176,000 `Bar` objects, independently of the copy the grid search
+had already loaded and used. Two materialisations of the same data, back
+to back, in the same process.
+
+**The duplicate-load fix, and the honest result.** Eliminating the second
+load required more care than the first fix: `null/cli.py`'s audit
+orchestration (leakage short-circuit, then `build_evidence`, then
+`evaluate`, then write the three artifacts) was inline inside
+`run_audit_command`, reachable only by constructing `argparse.Namespace`
+and going through the CLI. Extracted into `run_audit(run, *, bars=None,
+benchmark_bars=None, ...)` — loads bars only when not supplied, otherwise
+uses what it's given — with `run_audit_command` reduced to a thin
+argv-to-`run_audit` wrapper. `service/backtest/rsi2.py` now loads `bars`
+once and passes the same tuple to both `run_backtest` (the grid search) and
+`run_audit` (the real audit), instead of `run_audit_command` triggering a
+second `load_bars()`. Deliberately *not* two orchestrations: `run_audit` is
+the one sequence both the CLI and the service call, so the leakage
+short-circuit fires identically either way — `tests/unit/test_cli.py`
+proves this for both callers, the CLI-argv path and the bars-passed-in
+path, not just the one that existed before.
+
+Measured result: **529.2MB**, against 531.4MB before — essentially no
+change. This is the honest finding, not the hoped-for one: the ~280MB `Bar`
+tuple was never double-counted in the *peak* to begin with, because the old
+code's two loads were sequential (load, use, free; then load again) rather
+than simultaneous — the peak was always roughly `one Bar-tuple + whichever
+phase's own working set was larger`, and holding that one tuple
+continuously instead of reloading it doesn't change that maximum, only the
+total work done getting there. The duplicate-load fix is worth keeping on
+its own terms (less CPU spent re-parsing and re-quantising 176,000 rows,
+one fewer allocate/free cycle, and the single-orchestration-path property
+above), but it is not a memory fix, and does not get this closer to fitting
+in 512MB. That avenue — restructuring how the audit path itself loads
+`Bar` objects — is now measured out: two rounds, ~880MB → ~529MB combined,
+useful and real, and still not enough. What's left needs a decision outside
+this code: a smaller universe or grid for the hosted demo, or more memory.
+
 ## The pattern
 
 **Items 2 and 4 are the same shape.** In both, a test covering the defective path

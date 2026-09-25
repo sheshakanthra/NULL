@@ -541,6 +541,75 @@ def test_fatal_leakage_short_circuits_before_any_statistic(
     assert "Deflated Sharpe" not in html  # no metric cards: nothing was measured
 
 
+def test_fatal_leakage_short_circuits_when_bars_are_passed_in_directly(
+    tmp_path, bars_parquet, benchmark_parquet, monkeypatch
+) -> None:
+    """Same guarantee as the CLI-driven test above, for the other caller of
+    ``run_audit``: service/backtest/rsi2.py passes already-loaded bars in
+    directly (to avoid loading the real NIFTY 50 universe's Bar tuple a
+    second time -- see docs/findings.md #11) instead of letting run_audit
+    load them from a path. That must not be a second, un-guaranteed
+    orchestration -- run_audit is the one sequence both callers share, so
+    this proves the short-circuit fires identically either way.
+    """
+    from null.cli import InputError, load_run, run_audit
+    from null.contracts import LeakageFlag
+    from null.costs.india_equity import IndiaEquityCostModel
+    from null.data.ohlcv import load_bars
+    from null.leakage.audit import LeakageReport
+
+    def leaky(run, bars, **kwargs):
+        return LeakageReport(
+            flags=(
+                LeakageFlag(
+                    kind="decision_lag",
+                    severity="fatal",
+                    detail="planted fatal flag for the short-circuit test",
+                ),
+            ),
+            checks_run=("decision_lag",),
+            unchecked=("everything else",),
+        )
+
+    def explode(*args: object, **kwargs: object) -> object:
+        raise AssertionError("a statistic was computed despite fatal leakage")
+
+    monkeypatch.setattr("null.cli.audit_leakage", leaky)
+    monkeypatch.setattr("null.cli.deflated_sharpe_ratio", explode)
+    monkeypatch.setattr("null.cli.reality_check", explode)
+    monkeypatch.setattr("null.cli.compute_pbo", explode)
+    monkeypatch.setattr("null.cli.benchmark_check", explode)
+
+    run = load_run(run_json_for(tmp_path, bars_parquet))
+    bars = load_bars(bars_parquet)
+    benchmark_bars = load_bars(benchmark_parquet)
+    costs = IndiaEquityCostModel.from_yaml(COSTS)
+    out = tmp_path / "leak_direct"
+
+    code = run_audit(
+        run,
+        out=out,
+        costs=costs,
+        bars=bars,
+        benchmark_bars=benchmark_bars,
+        benchmark_is_total_return=False,
+    )
+    assert code == EXIT_REJECT
+    verdict = json.loads((out / "verdict.json").read_text())
+    assert verdict["result"] == "REJECT"
+    assert [g["name"] for g in verdict["gates"]] == ["leakage_clean"]
+    assert "no performance statistic was computed" in verdict["gates"][0]["rationale"]
+
+    with pytest.raises(InputError, match="benchmark_is_total_return must be given"):
+        run_audit(
+            run,
+            out=tmp_path / "missing_flag",
+            costs=costs,
+            bars=bars,
+            benchmark_bars=benchmark_bars,
+        )
+
+
 def run_json_for(tmp_path: Path, bars_parquet: Path) -> Path:
     frame = pd.read_parquet(bars_parquet)
     stamps = sorted({d for d in frame["date"]})

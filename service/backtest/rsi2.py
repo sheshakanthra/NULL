@@ -33,8 +33,8 @@ import numpy as np
 
 from examples.rsi2_nifty.build_run import write_run_artifacts
 from examples.rsi2_nifty.strategy import GridVariant, VariantResult, run_grid
-from null.cli import build_parser, run_audit_command
-from null.contracts import ParamPoint, SensitivityResult
+from null.cli import enrich_trials_from_parquet, load_run, load_sensitivity, run_audit
+from null.contracts import Bar, ParamPoint, SensitivityResult
 from null.costs.india_equity import IndiaEquityCostModel
 from null.data.ohlcv import DEFAULT_CACHE as OHLCV_CACHE
 from null.data.ohlcv import load_bars
@@ -229,7 +229,9 @@ class BacktestArtifacts:
     n_trials: int
 
 
-def run_backtest(spec: GridSpec, out_dir: Path) -> BacktestArtifacts:
+def run_backtest(
+    spec: GridSpec, out_dir: Path, *, bars: tuple[Bar, ...] | None = None
+) -> BacktestArtifacts:
     """Backtest every variant in ``spec`` against the committed NIFTY 50 cache
     and write ``run.json`` / ``run.trials.parquet`` / ``sensitivity.json``
     into ``out_dir``, in exactly the layout ``null audit --trials-parquet
@@ -239,12 +241,18 @@ def run_backtest(spec: GridSpec, out_dir: Path) -> BacktestArtifacts:
     committed OHLCV cache, never fetches. Raises rather than falling back if
     that cache is missing -- a silently-substituted bar series would audit a
     strategy against data it never actually ran on.
-    """
-    if not OHLCV_CACHE.exists():
-        raise FileNotFoundError(f"no OHLCV cache at {OHLCV_CACHE}")
 
+    ``bars`` is loaded from the cache only when not supplied. ``run_rsi2_audit``
+    loads it once and passes it here *and* to ``null.cli.run_audit`` afterward,
+    instead of this function loading its own copy that the later audit step
+    would then load again independently -- see this module's ``run_rsi2_audit``
+    and ``docs/findings.md`` #11.
+    """
     universe = _load_universe()
-    bars = load_bars(OHLCV_CACHE, symbols=universe)
+    if bars is None:
+        if not OHLCV_CACHE.exists():
+            raise FileNotFoundError(f"no OHLCV cache at {OHLCV_CACHE}")
+        bars = load_bars(OHLCV_CACHE, symbols=universe)
     if not bars:
         raise ValueError(
             f"no bars in {OHLCV_CACHE} for the {len(universe)}-symbol NIFTY 50 "
@@ -271,9 +279,9 @@ def run_backtest(spec: GridSpec, out_dir: Path) -> BacktestArtifacts:
         variants=variants,
     )
     # run_grid drops its own reference to `bars` once it's done with it (see
-    # that function's docstring); this drops the caller's, so the ~300MB
-    # full-universe Bar tuple is freed here rather than staying resident for
-    # the rest of this function. docs/findings.md #11.
+    # that function's docstring); this drops run_backtest's own local one too
+    # -- the caller's reference (run_rsi2_audit, which needs bars again for
+    # the audit phase) is a separate binding and is untouched by this `del`.
     del bars
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -336,26 +344,48 @@ def run_rsi2_audit(spec: GridSpec) -> dict[str, Any]:
     ``n_trials`` is asserted equal to the caller's own grid size before
     returning -- it must never be hardcoded, inferred, or allowed to drift
     from what was actually backtested (CLAUDE.md invariant 7).
+
+    Loads the NIFTY 50 universe's ``bars`` exactly once for the whole job
+    and reuses it for both the grid search (``run_backtest``) and the real
+    audit (``null.cli.run_audit``), instead of each phase loading its own
+    independent copy of the same ~176,000-object, ~280MB Bar tuple. The
+    audit step calls ``run_audit`` directly rather than going through
+    ``run_audit_command``'s argv/file interface -- ``run_audit`` is the one
+    shared orchestration both the CLI and this service call (leakage
+    short-circuit, then build_evidence, then evaluate), so calling it
+    directly here does not create a second implementation of that sequence,
+    only a second caller of the same one. See ``docs/findings.md`` #11.
     """
+    universe = _load_universe()
+    if not OHLCV_CACHE.exists():
+        raise FileNotFoundError(f"no OHLCV cache at {OHLCV_CACHE}")
+    bars = load_bars(OHLCV_CACHE, symbols=universe)
+    if not bars:
+        raise ValueError(
+            f"no bars in {OHLCV_CACHE} for the {len(universe)}-symbol NIFTY 50 "
+            "universe."
+        )
+
     with tempfile.TemporaryDirectory(prefix="null-rsi2-") as tmp:
         base = Path(tmp)
         backtest_dir = base / "backtest"
         audit_dir = base / "audit"
 
-        artifacts = run_backtest(spec, backtest_dir)
+        artifacts = run_backtest(spec, backtest_dir, bars=bars)
 
-        argv = [
-            "audit",
-            str(artifacts.run_path),
-            "--trials-parquet",
-            str(artifacts.trials_parquet_path),
-            "--sensitivity",
-            str(artifacts.sensitivity_path),
-            "--out",
-            str(audit_dir),
-        ]
-        args = build_parser().parse_args(argv)
-        run_audit_command(args)
+        run = load_run(artifacts.run_path)
+        run = enrich_trials_from_parquet(run, artifacts.trials_parquet_path)
+        costs = IndiaEquityCostModel.from_yaml(COSTS_CONFIG)
+        sensitivity = load_sensitivity(artifacts.sensitivity_path, run)
+
+        run_audit(
+            run,
+            out=audit_dir,
+            costs=costs,
+            bars=bars,
+            sensitivity_surface=sensitivity,
+        )
+        del bars
 
         verdict = json.loads((audit_dir / "verdict.json").read_text(encoding="utf-8"))
         evidence = json.loads((audit_dir / "evidence.json").read_text(encoding="utf-8"))

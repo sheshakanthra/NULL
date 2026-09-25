@@ -572,31 +572,64 @@ def _leakage_only_report(run: StrategyRun, leakage: LeakageReport) -> str:
     )
 
 
-def run_audit_command(args: argparse.Namespace) -> int:
-    out = Path(args.out)
+def run_audit(
+    run: StrategyRun,
+    *,
+    out: Path,
+    costs: IndiaEquityCostModel,
+    config_path: Path = DEFAULT_GATES_CONFIG,
+    bars: tuple[Bar, ...] | None = None,
+    bars_path: Path = OHLCV_CACHE,
+    benchmark_bars: tuple[Bar, ...] | None = None,
+    benchmark_is_total_return: bool | None = None,
+    benchmark_path_arg: str | None = None,
+    cost_robustness_path: Path | None = None,
+    sensitivity_surface: SensitivityResult | None = None,
+    force: bool = False,
+) -> int:
+    """The one audit pipeline: leakage short-circuit, then build_evidence +
+    evaluate, writing verdict.json / evidence.json / report.html into ``out``.
+
+    ``bars``/``benchmark_bars`` are loaded from ``bars_path``/
+    ``benchmark_path_arg`` only when not supplied. ``run_audit_command``
+    (the CLI) never supplies them -- it always loads from disk via
+    ``--bars``/``--benchmark``. A caller that already has them in memory
+    (``service/backtest/rsi2.py``, which needs the same bars for its own
+    grid search first) passes them straight through instead of triggering a
+    second ~280MB load of the same ~176,000 Bar objects -- see
+    ``docs/findings.md`` #11 for the production incident this exists to fix.
+    When ``benchmark_bars`` is supplied, ``benchmark_is_total_return`` must
+    be supplied too (it cannot be inferred from bars alone).
+
+    There is exactly one orchestration here, not two: the CLI and the
+    service both call this same function, so a caller that supplies bars
+    gets the identical leakage-short-circuit guarantee a caller that
+    doesn't does. ``docs/findings.md`` #6 is the reason that property is
+    written down rather than assumed -- a second, ad hoc path once skipped
+    the same guarantee by construction, not by a bug in either path alone.
+    """
     verdict_path = out / "verdict.json"
     report_path = out / "report.html"
 
-    if verdict_path.exists() and not args.force:
+    if verdict_path.exists() and not force:
         raise InputError(
             f"{verdict_path} already exists. Refusing to overwrite a verdict without "
             "--force: a verdict is an audit artifact, and silently replacing one "
             "loses the record of what was previously concluded."
         )
 
-    run = load_run(Path(args.run))
-    if args.trials_parquet:
-        run = enrich_trials_from_parquet(run, Path(args.trials_parquet))
-
     try:
-        costs = IndiaEquityCostModel.from_yaml(Path(args.costs))
-    except (OSError, KeyError, ValidationError) as exc:
-        raise InputError(f"could not load cost config {args.costs}: {exc}") from exc
-
-    bars_path = Path(args.bars) if args.bars else OHLCV_CACHE
-    try:
-        bars = load_bars(bars_path, symbols=tuple(run.universe))
-        benchmark_bars, benchmark_is_tri = _load_benchmark(args.benchmark)
+        if bars is None:
+            bars = load_bars(bars_path, symbols=tuple(run.universe))
+        if benchmark_bars is None:
+            benchmark_bars, benchmark_is_total_return = _load_benchmark(
+                benchmark_path_arg
+            )
+        elif benchmark_is_total_return is None:
+            raise ValueError(
+                "benchmark_is_total_return must be given when benchmark_bars is "
+                "supplied directly -- it cannot be inferred from the bars alone."
+            )
     except (FileNotFoundError, ValueError) as exc:
         raise InputError(str(exc)) from exc
 
@@ -630,15 +663,9 @@ def run_audit_command(args: argparse.Namespace) -> int:
             bars,
             benchmark_bars,
             costs,
-            cost_robustness_path=(
-                Path(args.cost_robustness) if args.cost_robustness else None
-            ),
-            benchmark_is_total_return=benchmark_is_tri,
-            sensitivity_surface=(
-                load_sensitivity(Path(args.sensitivity), run)
-                if args.sensitivity
-                else None
-            ),
+            cost_robustness_path=cost_robustness_path,
+            benchmark_is_total_return=benchmark_is_total_return,
+            sensitivity_surface=sensitivity_surface,
         )
     except ValueError as exc:
         raise InputError(str(exc)) from exc
@@ -649,7 +676,7 @@ def run_audit_command(args: argparse.Namespace) -> int:
             run=run,
             evidence=evidence,
             context=context,
-            config_path=Path(args.config),
+            config_path=config_path,
         )
     except GateConfigError as exc:
         raise InputError(str(exc)) from exc
@@ -682,6 +709,36 @@ def run_audit_command(args: argparse.Namespace) -> int:
     print(f"  {evidence_path}")
     print(f"  {report_path}")
     return EXIT_PASS if report.verdict.result == "PASS" else EXIT_REJECT
+
+
+def run_audit_command(args: argparse.Namespace) -> int:
+    """Thin argv-to-``run_audit`` wrapper. Always loads bars/benchmark from
+    disk -- the CLI has no in-memory bars to reuse -- so behaviour here is
+    unchanged from before the ``run_audit`` extraction."""
+    run = load_run(Path(args.run))
+    if args.trials_parquet:
+        run = enrich_trials_from_parquet(run, Path(args.trials_parquet))
+
+    try:
+        costs = IndiaEquityCostModel.from_yaml(Path(args.costs))
+    except (OSError, KeyError, ValidationError) as exc:
+        raise InputError(f"could not load cost config {args.costs}: {exc}") from exc
+
+    return run_audit(
+        run,
+        out=Path(args.out),
+        costs=costs,
+        config_path=Path(args.config),
+        bars_path=Path(args.bars) if args.bars else OHLCV_CACHE,
+        benchmark_path_arg=args.benchmark,
+        cost_robustness_path=(
+            Path(args.cost_robustness) if args.cost_robustness else None
+        ),
+        sensitivity_surface=(
+            load_sensitivity(Path(args.sensitivity), run) if args.sensitivity else None
+        ),
+        force=args.force,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
