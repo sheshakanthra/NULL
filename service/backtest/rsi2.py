@@ -22,14 +22,18 @@ never hardcoded, never inferred, never inflated past what was actually run.
 
 from __future__ import annotations
 
+import json
+import tempfile
 from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from examples.rsi2_nifty.build_run import write_run_artifacts
 from examples.rsi2_nifty.strategy import GridVariant, VariantResult, run_grid
+from null.cli import build_parser, run_audit_command
 from null.contracts import ParamPoint, SensitivityResult
 from null.costs.india_equity import IndiaEquityCostModel
 from null.data.ohlcv import DEFAULT_CACHE as OHLCV_CACHE
@@ -48,6 +52,7 @@ __all__ = [
     "MAX_HOLDING_CAP",
     "build_grid_spec",
     "run_backtest",
+    "run_rsi2_audit",
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -289,3 +294,84 @@ def run_backtest(spec: GridSpec, out_dir: Path) -> BacktestArtifacts:
         sensitivity_path=sensitivity_path,
         n_trials=len(variants),
     )
+
+
+def run_rsi2_audit(spec: GridSpec) -> dict[str, Any]:
+    """Backtest ``spec`` and audit the result with the real engine, returning
+    the payload ``GET /audit/jobs/{job_id}`` serves on ``done``.
+
+    This is the function ``service/jobs.py``'s ``JobManager`` runs in a
+    separate OS process (``ProcessPoolExecutor``), not a thread in the web
+    server's own process -- see that module's docstring for why. That is
+    the reason it lives here rather than in ``service/app.py`` next to the
+    endpoint that used to call it directly: a function submitted to a
+    process pool is pickled by reference (module + name) and re-imported in
+    the child process, and this module has no FastAPI app, no JobManager, no
+    CORS middleware, and no other import-time side effect for that child
+    process to needlessly reconstruct. ``service/app.py`` importing a
+    side-effect-free module here is fine; a spawned child re-importing
+    ``service.app`` itself, and everything it constructs at import time
+    purely to serve HTTP, would not be.
+
+    Raises plain exceptions on failure -- never ``HTTPException``, which is
+    a request-layer concept with no meaning in a worker process -- and
+    ``JobManager`` turns whatever's raised into ``str(exc)`` on the job's
+    ``error`` field: a clean message, never a stack trace, to whoever polls
+    for the result. (``concurrent.futures.ProcessPoolExecutor`` pickles the
+    exception itself back across the process boundary and re-raises it in
+    the parent on ``future.result()``, so this needs no special handling
+    beyond what worked when the call was in-process.)
+
+    Two temp directories, not one: the backtester's own output (``run.json``
+    and its siblings) is itself untrusted until the audit has run on it, so
+    it is kept apart from the audit's output rather than the two being
+    written into the same directory and risking a name collision silently
+    shadowing one artifact with another.
+
+    ``n_trials`` is asserted equal to the caller's own grid size before
+    returning -- it must never be hardcoded, inferred, or allowed to drift
+    from what was actually backtested (CLAUDE.md invariant 7).
+    """
+    with tempfile.TemporaryDirectory(prefix="null-rsi2-") as tmp:
+        base = Path(tmp)
+        backtest_dir = base / "backtest"
+        audit_dir = base / "audit"
+
+        artifacts = run_backtest(spec, backtest_dir)
+
+        argv = [
+            "audit",
+            str(artifacts.run_path),
+            "--trials-parquet",
+            str(artifacts.trials_parquet_path),
+            "--sensitivity",
+            str(artifacts.sensitivity_path),
+            "--out",
+            str(audit_dir),
+        ]
+        args = build_parser().parse_args(argv)
+        run_audit_command(args)
+
+        verdict = json.loads((audit_dir / "verdict.json").read_text(encoding="utf-8"))
+        evidence = json.loads((audit_dir / "evidence.json").read_text(encoding="utf-8"))
+
+    observed_n_trials = verdict.get("generated_from", {}).get("n_trials")
+    if observed_n_trials != spec.n_variants:
+        raise RuntimeError(
+            f"audited n_trials {observed_n_trials!r} does not match the "
+            f"requested grid size {spec.n_variants}. Refusing to return a "
+            "verdict whose declared trial count disagrees with the grid "
+            "that was actually run."
+        )
+
+    return {
+        "n_trials": spec.n_variants,
+        "grid": {
+            "periods": list(spec.periods),
+            "entries": list(spec.entries),
+            "exits": list(spec.exits),
+            "holding_caps": list(spec.holding_caps),
+        },
+        "verdict": verdict,
+        "evidence": evidence,
+    }

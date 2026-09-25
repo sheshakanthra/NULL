@@ -11,7 +11,7 @@ is wiring the web layer to something other than NULL's own judgement.
 from __future__ import annotations
 
 import json
-import threading
+import multiprocessing
 import time
 from pathlib import Path
 from typing import Any
@@ -20,6 +20,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from service.app import app, job_manager
+from tests.service._support import block_until_released, burn_cpu_for_seconds
+
+#: For submitting picklable, cross-process blocker jobs directly to
+#: job_manager in these tests -- see service/jobs.py's module docstring and
+#: tests/service/_support.py's block_until_released for why a bare
+#: threading.Event/multiprocessing.Event won't do.
+_mp_manager = multiprocessing.Manager()
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMMITTED_VERDICT = (
@@ -41,6 +48,47 @@ def test_health() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_health_stays_responsive_while_a_job_is_running() -> None:
+    """The actual production incident (service/jobs.py's module docstring):
+    a real audit's CPU-bound, GIL-holding computation ran on a thread in
+    this same process, plausibly starving this process's ability to answer
+    /health -- which Render's own health check read as "unresponsive" and
+    restarted the instance, wiping the in-memory job table. Fixed by running
+    jobs in a separate OS process (ProcessPoolExecutor). This submits a
+    synthetic, genuinely CPU-bound busy-loop directly to the app's own
+    job_manager (bypassing /audit/rsi2 -- no need to wait ~80s for a real
+    grid to prove a property about process, not audit, correctness) and
+    hits /health through the real FastAPI app while it runs.
+    """
+    job_id = job_manager.submit(burn_cpu_for_seconds, 3.0)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        job = job_manager.get(job_id)
+        if job is not None and job.status == "running":
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("job never reached running")
+
+    start = time.monotonic()
+    response = client.get("/health")
+    elapsed = time.monotonic() - start
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert elapsed < 1.0, (
+        f"/health took {elapsed:.2f}s while a CPU-bound job was running -- it "
+        "should answer near-instantly regardless of job load (this is the "
+        "exact property that failed in production before jobs ran in a "
+        "separate process)"
+    )
+
+    # Drain so the shared job_manager is idle for subsequent tests.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and job_manager.get(job_id).status != "done":  # type: ignore[union-attr]
+        time.sleep(0.05)
 
 
 def test_live_app_page_serves_and_wires_the_real_endpoints() -> None:
@@ -140,8 +188,15 @@ COMMITTED_GRID = {
 }
 
 
-def _poll_job(job_id: str, *, timeout: float = 180.0, interval: float = 0.5) -> dict[str, Any]:
-    """Poll GET /audit/jobs/{job_id} until it leaves queued/running."""
+def _poll_job(job_id: str, *, timeout: float = 450.0, interval: float = 0.5) -> dict[str, Any]:
+    """Poll GET /audit/jobs/{job_id} until it leaves queued/running.
+
+    450s, not ~80-90s: this dev machine's own load varies enough to matter --
+    the identical 108-variant grid measured 90s earlier in this session and
+    ~200s later under heavier load, in-process, with no code change in
+    between. Comfortable headroom over the observed worst case, same
+    principle as the client's own POLL_TIMEOUT_MS in service/static/index.html.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         response = client.get(f"/audit/jobs/{job_id}")
@@ -244,9 +299,9 @@ def test_unknown_job_id_is_a_clean_404() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _occupy_the_worker() -> tuple[str, threading.Event]:
-    release = threading.Event()
-    job_id = job_manager.submit(lambda: (release.wait(timeout=10), {"blocked": True})[1])
+def _occupy_the_worker() -> tuple[str, Any]:
+    release = _mp_manager.Event()
+    job_id = job_manager.submit(block_until_released, release)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         job = job_manager.get(job_id)
@@ -287,21 +342,19 @@ def test_audit_rsi2_returns_429_when_the_instance_is_at_capacity() -> None:
     """The real security surface this milestone closes: a burst of requests
     past this instance's capacity is rejected outright, not queued without
     bound and not crashed into."""
-    release = threading.Event()
-
-    def _blocker() -> dict[str, Any]:
-        release.wait(timeout=10)
-        return {}
+    release = _mp_manager.Event()
 
     capacity = job_manager.max_workers + job_manager.max_queue_size
     filler_ids = []
     try:
-        first = job_manager.submit(_blocker)
+        first = job_manager.submit(block_until_released, release)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and job_manager.get(first).status != "running":  # type: ignore[union-attr]
             time.sleep(0.005)
         filler_ids.append(first)
-        filler_ids.extend(job_manager.submit(_blocker) for _ in range(capacity - 1))
+        filler_ids.extend(
+            job_manager.submit(block_until_released, release) for _ in range(capacity - 1)
+        )
         assert len(filler_ids) == capacity
 
         overflow = client.post("/audit/rsi2", json=COMMITTED_GRID)

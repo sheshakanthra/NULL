@@ -184,10 +184,19 @@ process's memory only.** A restart -- a deploy, a crash, the free tier's own
 idle-sleep -- loses every queued or in-flight job without a trace. Fine for
 "submit it again"; not fine for anything that must not lose a request.
 
-- At most `MAX_CONCURRENT_JOBS` (1) audits run at once -- each pins a CPU
-  core for ~80s of mostly pure-Python cost arithmetic that doesn't release
-  the GIL, so more workers than that buys queuing fairness, not real
-  parallelism, on a free-tier instance's limited vCPU.
+**Each job runs in a separate OS process, not a thread in this one.**
+`JobManager`'s supervisor threads (below) submit the actual work to a
+`ProcessPoolExecutor` and block on the result -- see the module's own
+docstring, and `docs/findings.md` #9, for why: a CPU-bound, GIL-holding
+computation on a thread in this process can starve this same process's
+ability to answer `/health`, and on a resource-constrained free-tier
+instance that's not theoretical -- it's the confirmed root cause of a real
+production incident (below).
+
+- At most `MAX_CONCURRENT_JOBS` (1) audits run at once -- picked
+  conservatively for a free-tier instance with limited, likely shared,
+  vCPU; more processes than cores buys queuing fairness, not real
+  parallelism.
 - A `MAX_QUEUE_SIZE` (2) wait queue sits in front of the worker(s). Total
   accepted capacity is `MAX_CONCURRENT_JOBS + MAX_QUEUE_SIZE` = 3 jobs; a
   submission past that is a **429**, immediately, not a growing backlog.
@@ -202,38 +211,52 @@ idle-sleep -- loses every queued or in-flight job without a trace. Fine for
   that keeps polling a finished job resets that job's clock on every
   successful fetch, so it can't age out from under a poll gap shorter than
   the TTL.
+- Submitted work must be a plain, module-level, picklable function plus
+  picklable arguments -- never a lambda or a closure -- since it's pickled
+  across the process boundary to actually run. See
+  `service.backtest.rsi2.run_rsi2_audit` (what `POST /audit/rsi2` submits)
+  and `tests/service/_support.py` (what the tests submit) for the pattern.
 
-**Incident, Render free-tier production.** A submitted audit ran (gates
-showed RUNNING, elapsed climbing) and then the client got 404 --
-`GET /audit/jobs/{id}` reported the job gone while it was still supposed to
-be running. Root cause was **not** a bug in the eviction logic above: a
-running job's `finished_at` is `None` the entire time it runs, and
-`_evict_expired_locked` only ever considers jobs where that's set --
-already covered by `test_only_finished_jobs_are_evicted_by_ttl`, which
-passed before this incident and still does. The likely actual cause is a
-process restart mid-request: the free tier's ~0.5 CPU running the
-~20-million-iteration pure-Python cost loop
-(`examples/rsi2_nifty/strategy.py`'s `run_variant`, day x symbol x variant,
-GIL-bound, not vectorised) for several minutes instead of the ~80s this
-runs in on more capable hardware, plausibly starving Render's own health
-check or exhausting the instance's memory -- either of which restarts the
-process and wipes the in-memory job table outright, which is the
-already-documented in-memory tradeoff above, just triggered by resource
-pressure rather than a deploy. Not confirmed against Render's own logs
-(not accessible from here); stated with that caveat rather than as fact.
+**Incident, Render free-tier production -- root cause confirmed.** A
+submitted audit ran (gates showed RUNNING, elapsed climbing) and then the
+client got 404 -- `GET /audit/jobs/{id}` reported the job gone while it was
+still supposed to be running. The eviction logic above was never the cause
+(a running job's `finished_at` is `None` for its entire run and was never a
+candidate -- `test_only_finished_jobs_are_evicted_by_ttl` already proved
+that, before and after). The actual cause: the audit's
+~20-million-iteration pure-Python cost loop ran on a *thread in this same
+process*, and on the free tier's fraction of a CPU it plausibly denied the
+whole process -- including the thread meant to answer `/health` -- enough
+wall-clock time that Render's health check read the instance as
+unresponsive and restarted it, wiping the in-memory job table outright.
+Not a deploy, not a crash in the usual sense -- the service's own workload
+starved its own liveness check. Full account in `docs/findings.md` #9.
 
-What actually changed in response: the client poll ceiling went from 5 to
-10 minutes (comfortable headroom above observed free-tier runtimes, not
-just matching them), a single 404 no longer ends the poll loop immediately
-(`CONSECUTIVE_404_LIMIT` in `service/static/index.html` -- tolerates a
-transient blip, e.g. a redeploy boundary, without waiting the full ceiling
-on a job that's genuinely gone), and the grace-window refinement above
-(`last_retrieved_at`) makes a polled-but-finished job's TTL reset on every
-fetch rather than being a fixed window from `finished_at` alone. None of
-these can un-lose a job whose process actually restarted -- that data loss
-is real and is the accepted tradeoff stated at the top of this section --
-they narrow the gap between "genuinely gone" and "still running, just
-slower than expected."
+Fixed at the actual point of failure: jobs now run in a separate process
+(above), so this process's own responsiveness never depends on the same
+GIL an audit is spinning on --
+`test_health_stays_responsive_while_a_job_is_running` in
+`tests/service/test_app.py` pins exactly this (`/health` answers in under a
+second while a genuinely CPU-bound job is running). Separately, the
+~20-million-iteration loop itself was vectorised with numpy (`examples/
+rsi2_nifty/strategy.py`'s `run_variant`) -- see "Before/after timing"
+below and `docs/findings.md` #10 for the numerically-tricky part of getting
+that to reproduce the committed `evidence_hash` exactly. The earlier
+client-side mitigations (10-minute poll ceiling, tolerating a few
+consecutive 404s, the TTL grace window) all stay -- they're good defence in
+depth for a slow-but-not-crashed job -- but they were never the fix for
+this incident; the process boundary and the vectorisation are.
+
+### Before/after timing (the committed 108-variant grid)
+
+| | time |
+|---|---|
+| Original (thread, scalar cost loop) | ~74-90s on this session's dev machine when unloaded; ~200s observed under heavier load on the same machine, no code change in between -- the free-tier timing problem was never purely about Render, this machine's own variance made that visible |
+| + process isolation only | no meaningful change to the audit's own runtime (a process boundary adds low-single-digit-seconds of one-time interpreter/import overhead, then runs at the same speed) -- its effect is entirely on *process survivability*, not speed |
+| + vectorised cost loop | **49.0s**, byte-identical `run.json` / `run.trials.parquet` / `sensitivity.json`, hash unchanged (`baff7b68...`) |
+
+Production (Render, live URL) timing is in the session report once verified
+against the deployed instance.
 
 ## Tests
 
